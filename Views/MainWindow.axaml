@@ -1,22 +1,463 @@
-<Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:Left_4_Mod.ViewModels"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
-        x:Class="Left_4_Mod.Views.MainWindow"
-        x:DataType="vm:MainViewModel"
-        Icon="/Assets/avalonia-logo.ico"
-        Title="Left_4_Mod">
+<sukiUi:SukiWindow xmlns="https://github.com/avaloniaui"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:vm="using:Left_4_Mod.ViewModels"
+                   xmlns:models="using:Left_4_Mod.Models"
+                   xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                   xmlns:sukiUi="clr-namespace:SukiUI.Controls;assembly=SukiUI"
+                   xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
+                   mc:Ignorable="d" d:DesignWidth="1120" d:DesignHeight="700"
+                   x:Class="Left_4_Mod.Views.MainWindow"
+                   x:DataType="vm:MainViewModel"
+                   Title="{Binding WindowTitle}"
+                   Width="1120" Height="700"
+                   MinWidth="900" MinHeight="540"
+                   WindowStartupLocation="CenterScreen"
+                   Icon="/Assets/avalonia-logo.ico"
+                   CanPin="True"
+                   CanFullScreen="True"
+                   ShowBottomBorder="True"
+                   IsMenuVisible="False">
 
     <Design.DataContext>
-        <!-- This only sets the DataContext for the previewer in an IDE,
-             to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs) -->
         <vm:MainViewModel />
     </Design.DataContext>
 
-    <TextBox Text="{Binding Greeting}"
-             HorizontalAlignment="Center"
-             VerticalAlignment="Center" />
+    <sukiUi:SukiWindow.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="AppWindowBackground" Color="#F3F4F6" />
+                    <SolidColorBrush x:Key="AppToolbarBackground" Color="#FBFAFC" />
+                    <SolidColorBrush x:Key="AppPaneBackground" Color="#F3F4F6" />
+                    <SolidColorBrush x:Key="AppContentBackground" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AppStatusBackground" Color="#F7F7F9" />
+                    <SolidColorBrush x:Key="AppBorderBrush" Color="#E3E3E8" />
+                    <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#6B6B76" />
+                    <SolidColorBrush x:Key="AppAccentBrush" Color="#0F6CBD" />
+                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#140F6CBD" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppWindowBackground" Color="#F3F4F6" />
+                    <SolidColorBrush x:Key="AppToolbarBackground" Color="#FBFAFC" />
+                    <SolidColorBrush x:Key="AppPaneBackground" Color="#F3F4F6" />
+                    <SolidColorBrush x:Key="AppContentBackground" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AppStatusBackground" Color="#F7F7F9" />
+                    <SolidColorBrush x:Key="AppBorderBrush" Color="#E3E3E8" />
+                    <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#6B6B76" />
+                    <SolidColorBrush x:Key="AppAccentBrush" Color="#0F6CBD" />
+                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#140F6CBD" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppWindowBackground" Color="#1B1B1F" />
+                    <SolidColorBrush x:Key="AppToolbarBackground" Color="#232327" />
+                    <SolidColorBrush x:Key="AppPaneBackground" Color="#1F1F23" />
+                    <SolidColorBrush x:Key="AppContentBackground" Color="#1B1B1F" />
+                    <SolidColorBrush x:Key="AppStatusBackground" Color="#202024" />
+                    <SolidColorBrush x:Key="AppBorderBrush" Color="#34343A" />
+                    <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#A0A0AA" />
+                    <SolidColorBrush x:Key="AppAccentBrush" Color="#4CC2FF" />
+                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#224CC2FF" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </sukiUi:SukiWindow.Resources>
 
-</Window>
+    <sukiUi:SukiWindow.Styles>
+        <Style Selector="Button.flat">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="8,6" />
+        </Style>
+        <Style Selector="Button.crumb">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="6,2" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="24" />
+            <Setter Property="CornerRadius" Value="4" />
+        </Style>
+        <Style Selector="Button.columnHeader">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="Foreground" Value="{DynamicResource AppTextSecondaryBrush}" />
+        </Style>
+        <Style Selector="TextBlock.secondary">
+            <Setter Property="Foreground" Value="{DynamicResource AppTextSecondaryBrush}" />
+        </Style>
+    </sukiUi:SukiWindow.Styles>
+
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Background="{DynamicResource AppWindowBackground}">
+
+        <!-- ================= 工具栏 ================= -->
+        <Border Grid.Row="0"
+                Background="{DynamicResource AppToolbarBackground}"
+                BorderBrush="{DynamicResource AppBorderBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="12,8">
+            <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <Button Click="OnOpenFolderClick" ToolTip.Tip="选择一个文件夹（Ctrl+O）">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <materialIcons:MaterialIcon Kind="FolderOpen" IconSize="18" />
+                            <TextBlock Text="打开文件夹" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Width="1" Height="22" Margin="6,0" Background="{DynamicResource AppBorderBrush}" />
+
+                    <Button Classes="flat" Click="OnBackClick" IsEnabled="{Binding CanGoBack}" ToolTip.Tip="后退（Alt+←）">
+                        <materialIcons:MaterialIcon Kind="ArrowLeft" IconSize="18" />
+                    </Button>
+                    <Button Classes="flat" Click="OnForwardClick" IsEnabled="{Binding CanGoForward}" ToolTip.Tip="前进（Alt+→）">
+                        <materialIcons:MaterialIcon Kind="ArrowRight" IconSize="18" />
+                    </Button>
+                    <Button Classes="flat" Click="OnUpClick" IsEnabled="{Binding CanGoUp}" ToolTip.Tip="上一级（Backspace）">
+                        <materialIcons:MaterialIcon Kind="ArrowUp" IconSize="18" />
+                    </Button>
+                    <Button Classes="flat" Click="OnRefreshClick" ToolTip.Tip="刷新（F5）">
+                        <materialIcons:MaterialIcon Kind="Refresh" IconSize="18" />
+                    </Button>
+                </StackPanel>
+
+                <TextBox Grid.Column="1"
+                         x:Name="AddressBox"
+                         Margin="16,0"
+                         VerticalAlignment="Center"
+                         FontSize="12"
+                         MinHeight="32"
+                         PlaceholderText="输入文件夹路径，按回车打开"
+                         Text="{Binding AddressText, Mode=OneWay}"
+                         KeyDown="OnAddressKeyDown" />
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBox x:Name="SearchBox"
+                             Width="220"
+                             FontSize="12"
+                             MinHeight="32"
+                             PlaceholderText="搜索当前文件夹"
+                             TextChanged="OnSearchTextChanged"
+                             KeyDown="OnSearchKeyDown">
+                        <TextBox.InnerLeftContent>
+                            <materialIcons:MaterialIcon Kind="Magnify" IconSize="15" Margin="8,0,0,0" />
+                        </TextBox.InnerLeftContent>
+                    </TextBox>
+
+                    <Button Click="OnNewFolderClick" ToolTip.Tip="新建文件夹（Ctrl+Shift+N）">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <materialIcons:MaterialIcon Kind="FolderPlus" IconSize="17" />
+                            <TextBlock Text="新建文件夹" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button Click="OnDeleteClick" IsEnabled="{Binding HasSelection}" ToolTip.Tip="删除到回收站（Delete）">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <materialIcons:MaterialIcon Kind="DeleteOutline" IconSize="17" />
+                            <TextBlock Text="删除" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ================= 地址（面包屑） ================= -->
+        <Border Grid.Row="1"
+                Background="{DynamicResource AppContentBackground}"
+                BorderBrush="{DynamicResource AppBorderBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="10,2">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <ItemsControl ItemsSource="{Binding Breadcrumbs}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:BreadcrumbItem">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Classes="crumb"
+                                        Content="{Binding Name}"
+                                        Tag="{Binding Path}"
+                                        Click="OnBreadcrumbClick" />
+                                <TextBlock Text="›"
+                                           Margin="0,0,2,0"
+                                           Foreground="{DynamicResource AppTextSecondaryBrush}"
+                                           VerticalAlignment="Center"
+                                           IsVisible="{Binding ShowSeparator}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+
+        <!-- ================= 主体 ================= -->
+        <Grid Grid.Row="2" ColumnDefinitions="220,*">
+
+            <!-- 左侧快速访问 -->
+            <Border Grid.Column="0" Background="{DynamicResource AppPaneBackground}" Padding="8,10">
+                <DockPanel LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="快速访问"
+                               Margin="8,2,8,8"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Classes="secondary" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <ItemsControl ItemsSource="{Binding QuickPlaces}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:QuickPlace">
+                                    <Button Classes="flat"
+                                            HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Left"
+                                            Padding="10,7"
+                                            Margin="0,1"
+                                            Tag="{Binding Path}"
+                                            Click="OnQuickPlaceClick"
+                                            ToolTip.Tip="{Binding Path}">
+                                        <StackPanel Orientation="Horizontal" Spacing="9">
+                                            <materialIcons:MaterialIcon Kind="{Binding IconKind}" IconSize="16" />
+                                            <TextBlock Text="{Binding Name}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- 右侧文件列表 -->
+            <Grid Grid.Column="1" Background="{DynamicResource AppContentBackground}" RowDefinitions="Auto,*">
+
+                <!-- 列头 -->
+                <Border Grid.Row="0"
+                        BorderBrush="{DynamicResource AppBorderBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="12,0,12,0"
+                        Height="32">
+                    <Grid ColumnDefinitions="32,*,150,120,90,26">
+                        <Button Grid.Column="1"
+                                Classes="columnHeader"
+                                Content="{Binding NameHeader}"
+                                Click="OnSortNameClick" />
+                        <Button Grid.Column="2"
+                                Classes="columnHeader"
+                                Content="{Binding ModifiedHeader}"
+                                Click="OnSortModifiedClick" />
+                        <Button Grid.Column="3"
+                                Classes="columnHeader"
+                                Content="{Binding TypeHeader}"
+                                Click="OnSortTypeClick" />
+                        <Button Grid.Column="4"
+                                Classes="columnHeader"
+                                Content="{Binding SizeHeader}"
+                                HorizontalAlignment="Right"
+                                Click="OnSortSizeClick" />
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="1">
+                    <ListBox x:Name="FileList"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Padding="0"
+                             SelectionMode="Multiple"
+                             ItemsSource="{Binding Entries}"
+                             SelectionChanged="OnFileSelectionChanged"
+                             DoubleTapped="OnFileListDoubleTapped"
+                             PointerPressed="OnFileListPointerPressed"
+                             PointerMoved="OnFileListPointerMoved">
+                        <ListBox.ContextMenu>
+                            <ContextMenu Opening="OnContextMenuOpening">
+                                <MenuItem Header="打开" Tag="open" Click="OnOpenEntryClick" />
+                                <MenuItem Header="在资源管理器中打开" Tag="reveal" Click="OnRevealInExplorerClick" />
+                                <Separator />
+                                <MenuItem Header="新建文件夹" Tag="newFolder" Click="OnNewFolderClick" />
+                                <MenuItem Header="新建文本文档" Tag="newFile" Click="OnNewTextFileClick" />
+                                <Separator />
+                                <MenuItem Header="复制" Tag="copy" Click="OnCopyClick" />
+                                <MenuItem Header="剪切" Tag="cut" Click="OnCutClick" />
+                                <MenuItem Header="粘贴" Tag="paste" Click="OnPasteClick" />
+                                <MenuItem Header="移动到…" Tag="moveTo" Click="OnMoveToClick" />
+                                <Separator />
+                                <MenuItem Header="重命名" Tag="rename" Click="OnRenameClick" />
+                                <MenuItem Header="删除" Tag="delete" Click="OnDeleteClick" />
+                                <Separator />
+                                <MenuItem Header="刷新" Tag="refresh" Click="OnRefreshClick" />
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
+
+                        <ListBox.Styles>
+                            <Style Selector="ListBoxItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="MinHeight" Value="32" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </ListBox.Styles>
+
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="models:FileSystemEntry">
+                                <Grid Height="32"
+                                      Margin="12,0"
+                                      ColumnDefinitions="32,*,150,120,90,26"
+                                      Opacity="{Binding RowOpacity}">
+                                    <materialIcons:MaterialIcon Grid.Column="0"
+                                                                Kind="{Binding IconKind}"
+                                                                IconSize="18"
+                                                                HorizontalAlignment="Left"
+                                                                VerticalAlignment="Center" />
+
+                                    <Grid Grid.Column="1" Margin="0,0,12,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Name}"
+                                                   IsVisible="{Binding !IsRenaming}"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBox x:Name="RenameBox"
+                                                 Text="{Binding EditName, Mode=OneWay}"
+                                                 IsVisible="{Binding IsRenaming}"
+                                                 FontSize="13"
+                                                 MinHeight="24"
+                                                 Height="24"
+                                                 Padding="4,0"
+                                                 VerticalAlignment="Center"
+                                                 KeyDown="OnRenameKeyDown"
+                                                 LostFocus="OnRenameLostFocus"
+                                                 AttachedToVisualTree="OnRenameBoxAttached" />
+                                    </Grid>
+
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding ModifiedText}"
+                                               FontSize="12"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               Classes="secondary" />
+                                    <TextBlock Grid.Column="3"
+                                               Text="{Binding TypeText}"
+                                               FontSize="12"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               Classes="secondary" />
+                                    <TextBlock Grid.Column="4"
+                                               Text="{Binding SizeText}"
+                                               FontSize="12"
+                                               VerticalAlignment="Center"
+                                               HorizontalAlignment="Right"
+                                               Classes="secondary" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- 欢迎页：尚未选择文件夹 -->
+                    <Border IsVisible="{Binding ShowWelcome}"
+                            Background="{DynamicResource AppContentBackground}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="460">
+                            <materialIcons:MaterialIcon Kind="FolderSearch"
+                                                        IconSize="72"
+                                                        Foreground="{DynamicResource AppAccentBrush}"
+                                                        HorizontalAlignment="Center" />
+                            <TextBlock Text="选择一个文件夹开始"
+                                       FontSize="22"
+                                       FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="选好文件夹后，这里会列出其中的文件和子文件夹。你可以像在资源管理器中一样新建、重命名、移动、复制和删除项目。"
+                                       TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       Classes="secondary" />
+                            <Button Content="选择文件夹"
+                                    Click="OnOpenFolderClick"
+                                    HorizontalAlignment="Center"
+                                    Padding="18,8"
+                                    Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 空文件夹 -->
+                    <Border IsVisible="{Binding IsEmptyFolder}"
+                            Background="{DynamicResource AppContentBackground}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                            <materialIcons:MaterialIcon Kind="FolderOpen"
+                                                        IconSize="64"
+                                                        Foreground="{DynamicResource AppTextSecondaryBrush}"
+                                                        HorizontalAlignment="Center" />
+                            <TextBlock Text="此文件夹为空"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="这里还没有任何内容，可以新建文件夹或把文件拖进来。"
+                                       Classes="secondary"
+                                       HorizontalAlignment="Center" />
+                            <Button Content="新建文件夹"
+                                    Click="OnNewFolderClick"
+                                    HorizontalAlignment="Center"
+                                    Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 搜索无结果 -->
+                    <Border IsVisible="{Binding HasNoResults}"
+                            Background="{DynamicResource AppContentBackground}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                            <materialIcons:MaterialIcon Kind="Magnify"
+                                                        IconSize="56"
+                                                        Foreground="{DynamicResource AppTextSecondaryBrush}"
+                                                        HorizontalAlignment="Center" />
+                            <TextBlock Text="没有匹配的项目"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="换个关键词试试，或清除搜索条件。"
+                                       Classes="secondary"
+                                       HorizontalAlignment="Center" />
+                            <Button Content="清除搜索"
+                                    Click="OnClearSearchClick"
+                                    HorizontalAlignment="Center"
+                                    Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <!-- ================= 状态栏 ================= -->
+        <Border Grid.Row="3"
+                Background="{DynamicResource AppStatusBackground}"
+                BorderBrush="{DynamicResource AppBorderBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="14,6">
+            <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="14">
+                    <TextBlock Text="{Binding StatusText}" FontSize="12" Classes="secondary" />
+                    <TextBlock Text="{Binding SelectionStatus}" FontSize="12" Classes="secondary" />
+                    <TextBlock Text="{Binding ClipboardStatus}" FontSize="12" Classes="secondary" />
+                </StackPanel>
+
+                <TextBlock Grid.Column="1"
+                           Text="{Binding Message}"
+                           FontSize="12"
+                           Margin="18,0"
+                           TextTrimming="CharacterEllipsis"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Classes="secondary" />
+
+                <ProgressBar Grid.Column="2"
+                             IsIndeterminate="True"
+                             Width="90"
+                             Height="4"
+                             VerticalAlignment="Center"
+                             IsVisible="{Binding IsLoading}" />
+            </Grid>
+        </Border>
+    </Grid>
+</sukiUi:SukiWindow>
