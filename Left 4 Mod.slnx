@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="Left 4 Mod.csproj" />
+  <Project Path="tests/Left4Mod.Tests/Left4Mod.Tests.csproj" />
 </Solution>

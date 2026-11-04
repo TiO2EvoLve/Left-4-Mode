@@ -1,0 +1,56 @@
+<sukiUi:SukiWindow xmlns="https://github.com/avaloniaui"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:sukiUi="clr-namespace:SukiUI.Controls;assembly=SukiUI"
+                   xmlns:vm="using:Left_4_Mod.ViewModels"
+                   x:Class="Left_4_Mod.Views.WorkshopWindow"
+                   x:DataType="vm:MainViewModel"
+                   Title="从创意工坊添加模组"
+                   Width="620" Height="360"
+                   CanResize="False"
+                   WindowStartupLocation="CenterOwner"
+                   ShowInTaskbar="False"
+                   Icon="/Assets/avalonia-logo.ico"
+                   IsMenuVisible="False"
+                   ShowBottomBorder="True">
+
+    <Grid RowDefinitions="*,Auto" Margin="20,14,20,16">
+        <StackPanel Grid.Row="0" Spacing="12">
+            <TextBlock Text="输入创意工坊物品 ID 或链接"
+                       FontSize="16"
+                       FontWeight="SemiBold" />
+            <TextBox x:Name="IdBox"
+                     MinHeight="36"
+                     PlaceholderText="例如 123456789 或 https://steamcommunity.com/sharedfiles/filedetails/?id=123456789" />
+            <TextBlock Text="仅支持单个《求生之路 2》创意工坊物品。下载后的 VPK 会保存到模组库的 Workshop 分组中，默认不启用。"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Opacity="0.7" />
+            <ProgressBar x:Name="Progress"
+                         Minimum="0"
+                         Maximum="100"
+                         Value="{Binding ProgressValue}"
+                         IsIndeterminate="{Binding IsProgressIndeterminate}"
+                         Height="4"
+                         IsVisible="{Binding IsBusy}" />
+            <TextBlock x:Name="StatusText"
+                       Text="{Binding BusyText}"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Opacity="0.8" />
+            <TextBlock x:Name="ErrorText"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Foreground="#C42B1C"
+                       IsVisible="False" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button x:Name="CancelButton" Content="取消" Click="OnCancelClick" />
+            <Button x:Name="AddButton" Content="下载并添加" Click="OnAddClick" />
+        </StackPanel>
+    </Grid>
+</sukiUi:SukiWindow>

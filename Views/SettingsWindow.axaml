@@ -1,0 +1,93 @@
+<sukiUi:SukiWindow xmlns="https://github.com/avaloniaui"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:sukiUi="clr-namespace:SukiUI.Controls;assembly=SukiUI"
+                   xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
+                   x:Class="Left_4_Mod.Views.SettingsWindow"
+                   Title="设置"
+                   Width="720" Height="640"
+                   MinWidth="640" MinHeight="480"
+                   CanResize="False"
+                   WindowStartupLocation="CenterOwner"
+                   ShowInTaskbar="False"
+                   Icon="/Assets/avalonia-logo.ico"
+                   IsMenuVisible="False"
+                   ShowBottomBorder="True">
+
+    <Grid RowDefinitions="*,Auto" Margin="20,12,20,16">
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="18" Margin="0,0,8,0">
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="模组库" FontSize="16" FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" x:Name="LibraryBox" MinHeight="34" />
+                        <Button Grid.Column="1" Content="浏览…" Click="OnBrowseLibraryClick" />
+                    </Grid>
+                    <TextBlock Text="模组库只用于存放 VPK 源文件；更改后会重新扫描并加载对应的启用状态。"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Opacity="0.7" />
+                </StackPanel>
+
+                <Rectangle Height="1" Fill="#22808080" />
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="L4D2 游戏目录" FontSize="16" FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" x:Name="GameBox" MinHeight="34"
+                                 PlaceholderText="游戏根目录、left4dead2 或 addons 目录" />
+                        <Button Grid.Column="1" Content="浏览…" Click="OnBrowseGameClick" />
+                        <Button Grid.Column="2" x:Name="DetectButton" Content="自动检测" Click="OnDetectGameClick" />
+                    </Grid>
+                    <TextBlock x:Name="GameHint"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Opacity="0.7" />
+                </StackPanel>
+
+                <Rectangle Height="1" Fill="#22808080" />
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="推送方式：符号链接" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="推送时只在游戏 addons 目录中创建指向模组库源 VPK 的符号链接（l4m_*.vpk），不会复制源文件。游戏会直接读取模组库中的文件。"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Opacity="0.7" />
+                    <TextBlock Text="Windows 需要开启开发者模式或以管理员身份运行，并且文件系统需支持符号链接（NTFS）。"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Opacity="0.7" />
+                    <TextBlock Text="推送只会新增、更新或清理本管理器登记的 l4m_*.vpk 符号链接；不会覆盖或删除你手动放入 addons 的文件。"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Opacity="0.7" />
+                    <TextBlock Text="注意：更改游戏目录或模组库不会自动清理旧位置中已经由管理器创建的链接。"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Opacity="0.7" />
+                </StackPanel>
+
+                <Rectangle Height="1" Fill="#22808080" />
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="诊断" FontSize="16" FontWeight="SemiBold" />
+                    <Button Content="打开日志文件夹" Click="OnOpenLogsClick" HorizontalAlignment="Left" />
+                </StackPanel>
+
+                <TextBlock x:Name="ErrorText"
+                           IsVisible="False"
+                           Foreground="#C42B1C"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Content="取消" Click="OnCancelClick" />
+            <Button Content="保存" Click="OnSaveClick" />
+        </StackPanel>
+    </Grid>
+</sukiUi:SukiWindow>

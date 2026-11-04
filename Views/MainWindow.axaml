@@ -19,45 +19,35 @@
                    ShowBottomBorder="True"
                    IsMenuVisible="False">
 
-    <Design.DataContext>
-        <vm:MainViewModel />
-    </Design.DataContext>
-
     <sukiUi:SukiWindow.Resources>
         <ResourceDictionary>
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
                     <SolidColorBrush x:Key="AppWindowBackground" Color="#F3F4F6" />
                     <SolidColorBrush x:Key="AppToolbarBackground" Color="#FBFAFC" />
-                    <SolidColorBrush x:Key="AppPaneBackground" Color="#F3F4F6" />
                     <SolidColorBrush x:Key="AppContentBackground" Color="#FFFFFF" />
                     <SolidColorBrush x:Key="AppStatusBackground" Color="#F7F7F9" />
                     <SolidColorBrush x:Key="AppBorderBrush" Color="#E3E3E8" />
                     <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#6B6B76" />
                     <SolidColorBrush x:Key="AppAccentBrush" Color="#0F6CBD" />
-                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#140F6CBD" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="AppWindowBackground" Color="#F3F4F6" />
                     <SolidColorBrush x:Key="AppToolbarBackground" Color="#FBFAFC" />
-                    <SolidColorBrush x:Key="AppPaneBackground" Color="#F3F4F6" />
                     <SolidColorBrush x:Key="AppContentBackground" Color="#FFFFFF" />
                     <SolidColorBrush x:Key="AppStatusBackground" Color="#F7F7F9" />
                     <SolidColorBrush x:Key="AppBorderBrush" Color="#E3E3E8" />
                     <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#6B6B76" />
                     <SolidColorBrush x:Key="AppAccentBrush" Color="#0F6CBD" />
-                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#140F6CBD" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="AppWindowBackground" Color="#1B1B1F" />
                     <SolidColorBrush x:Key="AppToolbarBackground" Color="#232327" />
-                    <SolidColorBrush x:Key="AppPaneBackground" Color="#1F1F23" />
                     <SolidColorBrush x:Key="AppContentBackground" Color="#1B1B1F" />
                     <SolidColorBrush x:Key="AppStatusBackground" Color="#202024" />
                     <SolidColorBrush x:Key="AppBorderBrush" Color="#34343A" />
                     <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#A0A0AA" />
                     <SolidColorBrush x:Key="AppAccentBrush" Color="#4CC2FF" />
-                    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#224CC2FF" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
@@ -70,14 +60,6 @@
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Padding" Value="8,6" />
         </Style>
-        <Style Selector="Button.crumb">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="6,2" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="MinHeight" Value="24" />
-            <Setter Property="CornerRadius" Value="4" />
-        </Style>
         <Style Selector="Button.columnHeader">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -85,378 +67,350 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="CornerRadius" Value="4" />
             <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="Foreground" Value="{DynamicResource AppTextSecondaryBrush}" />
         </Style>
         <Style Selector="TextBlock.secondary">
             <Setter Property="Foreground" Value="{DynamicResource AppTextSecondaryBrush}" />
         </Style>
+        <Style Selector="Button.filter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="6,2" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
     </sukiUi:SukiWindow.Styles>
 
     <Grid RowDefinitions="Auto,Auto,*,Auto" Background="{DynamicResource AppWindowBackground}">
 
-        <!-- ================= 工具栏 ================= -->
+        <!-- ================= 顶部：只保留搜索 ================= -->
         <Border Grid.Row="0"
                 Background="{DynamicResource AppToolbarBackground}"
                 BorderBrush="{DynamicResource AppBorderBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="12,8">
-            <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                Padding="14,10">
+            <TextBox x:Name="SearchBox"
+                     IsEnabled="{Binding HasLibrary}"
+                     FontSize="13"
+                     MinHeight="36"
+                     PlaceholderText="搜索模组名称、文件名或分组…"
+                     TextChanged="OnSearchTextChanged"
+                     KeyDown="OnSearchKeyDown">
+                <TextBox.InnerRightContent>
+                    <Button Classes="filter"
+                            IsEnabled="{Binding HasLibrary}"
+                            ToolTip.Tip="筛选：分组 / 启用状态 / 部署状态">
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedRight">
+                                <Border Width="330"
+                                        Padding="16"
+                                        CornerRadius="8"
+                                        Background="{DynamicResource AppContentBackground}"
+                                        BorderBrush="{DynamicResource AppBorderBrush}"
+                                        BorderThickness="1">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="筛选模组" FontWeight="SemiBold" />
+                                        <TextBlock Text="分组" FontSize="12" Classes="secondary" />
+                                        <ComboBox ItemsSource="{Binding GroupOptions}"
+                                                  SelectedItem="{Binding SelectedGroup, Mode=TwoWay}"
+                                                  HorizontalAlignment="Stretch">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="models:GroupOption">
+                                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                                        <TextBlock Text="{Binding DisplayName}" />
+                                                        <TextBlock Text="{Binding CountText}" Classes="secondary" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                    <Button Click="OnOpenFolderClick" ToolTip.Tip="选择一个文件夹（Ctrl+O）">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <materialIcons:MaterialIcon Kind="FolderOpen" IconSize="18" />
-                            <TextBlock Text="打开文件夹" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
+                                        <TextBlock Text="启用状态" FontSize="12" Classes="secondary" />
+                                        <ComboBox SelectedIndex="{Binding EnabledFilterIndex, Mode=TwoWay}"
+                                                  HorizontalAlignment="Stretch">
+                                            <ComboBoxItem Content="全部状态" />
+                                            <ComboBoxItem Content="已启用" />
+                                            <ComboBoxItem Content="未启用" />
+                                        </ComboBox>
 
-                    <Border Width="1" Height="22" Margin="6,0" Background="{DynamicResource AppBorderBrush}" />
+                                        <TextBlock Text="部署状态" FontSize="12" Classes="secondary" />
+                                        <ComboBox SelectedIndex="{Binding DeploymentFilterIndex, Mode=TwoWay}"
+                                                  HorizontalAlignment="Stretch">
+                                            <ComboBoxItem Content="全部部署状态" />
+                                            <ComboBoxItem Content="已部署" />
+                                            <ComboBoxItem Content="未部署" />
+                                        </ComboBox>
 
-                    <Button Classes="flat" Click="OnBackClick" IsEnabled="{Binding CanGoBack}" ToolTip.Tip="后退（Alt+←）">
-                        <materialIcons:MaterialIcon Kind="ArrowLeft" IconSize="18" />
+                                        <Button Content="清除全部筛选"
+                                                HorizontalAlignment="Right"
+                                                Click="OnClearFiltersClick" />
+                                    </StackPanel>
+                                </Border>
+                            </Flyout>
+                        </Button.Flyout>
+                        <materialIcons:MaterialIcon Kind="FilterVariant" IconSize="18" />
                     </Button>
-                    <Button Classes="flat" Click="OnForwardClick" IsEnabled="{Binding CanGoForward}" ToolTip.Tip="前进（Alt+→）">
-                        <materialIcons:MaterialIcon Kind="ArrowRight" IconSize="18" />
-                    </Button>
-                    <Button Classes="flat" Click="OnUpClick" IsEnabled="{Binding CanGoUp}" ToolTip.Tip="上一级（Backspace）">
-                        <materialIcons:MaterialIcon Kind="ArrowUp" IconSize="18" />
-                    </Button>
-                    <Button Classes="flat" Click="OnRefreshClick" ToolTip.Tip="刷新（F5）">
-                        <materialIcons:MaterialIcon Kind="Refresh" IconSize="18" />
-                    </Button>
-                </StackPanel>
-
-                <TextBox Grid.Column="1"
-                         x:Name="AddressBox"
-                         Margin="16,0"
-                         VerticalAlignment="Center"
-                         FontSize="12"
-                         MinHeight="32"
-                         PlaceholderText="输入文件夹路径，按回车打开"
-                         Text="{Binding AddressText, Mode=OneWay}"
-                         KeyDown="OnAddressKeyDown" />
-
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <TextBox x:Name="SearchBox"
-                             Width="220"
-                             FontSize="12"
-                             MinHeight="32"
-                             PlaceholderText="搜索当前文件夹"
-                             TextChanged="OnSearchTextChanged"
-                             KeyDown="OnSearchKeyDown">
-                        <TextBox.InnerLeftContent>
-                            <materialIcons:MaterialIcon Kind="Magnify" IconSize="15" Margin="8,0,0,0" />
-                        </TextBox.InnerLeftContent>
-                    </TextBox>
-
-                    <Button Click="OnNewFolderClick" ToolTip.Tip="新建文件夹（Ctrl+Shift+N）">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <materialIcons:MaterialIcon Kind="FolderPlus" IconSize="17" />
-                            <TextBlock Text="新建文件夹" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-
-                    <Button Click="OnDeleteClick" IsEnabled="{Binding HasSelection}" ToolTip.Tip="删除到回收站（Delete）">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <materialIcons:MaterialIcon Kind="DeleteOutline" IconSize="17" />
-                            <TextBlock Text="删除" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
-            </Grid>
+                </TextBox.InnerRightContent>
+            </TextBox>
         </Border>
 
-        <!-- ================= 地址（面包屑） ================= -->
+        <!-- ================= 列头 ================= -->
         <Border Grid.Row="1"
+                IsVisible="{Binding HasLibrary}"
                 Background="{DynamicResource AppContentBackground}"
                 BorderBrush="{DynamicResource AppBorderBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="10,2">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                <ItemsControl ItemsSource="{Binding Breadcrumbs}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="models:BreadcrumbItem">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Classes="crumb"
-                                        Content="{Binding Name}"
-                                        Tag="{Binding Path}"
-                                        Click="OnBreadcrumbClick" />
-                                <TextBlock Text="›"
-                                           Margin="0,0,2,0"
-                                           Foreground="{DynamicResource AppTextSecondaryBrush}"
-                                           VerticalAlignment="Center"
-                                           IsVisible="{Binding ShowSeparator}" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+                Padding="8,0"
+                Height="34">
+            <Grid ColumnDefinitions="36,*,160,90,140,110,26">
+                <Button Grid.Column="1"
+                        Classes="columnHeader"
+                        Content="{Binding NameHeader}"
+                        Click="OnSortNameClick" />
+                <Button Grid.Column="2"
+                        Classes="columnHeader"
+                        Content="{Binding GroupHeader}"
+                        Click="OnSortGroupClick" />
+                <Button Grid.Column="3" Classes="columnHeader" Content="{Binding SizeHeader}"
+                        HorizontalAlignment="Right" HorizontalContentAlignment="Right" Margin="0,0,14,0"
+                        Click="OnSortSizeClick" />
+                <Button Grid.Column="4" Classes="columnHeader" Content="{Binding ModifiedHeader}" Margin="8,0,0,0" Click="OnSortModifiedClick" />
+                <TextBlock Grid.Column="5"
+                           Text="状态"
+                           FontSize="12"
+                           Margin="4,0"
+                           VerticalAlignment="Center"
+                           Classes="secondary" />
+            </Grid>
         </Border>
 
-        <!-- ================= 主体 ================= -->
-        <Grid Grid.Row="2" ColumnDefinitions="220,*">
+        <!-- ================= 模组列表 ================= -->
+        <Grid Grid.Row="2" Background="{DynamicResource AppContentBackground}">
+            <ListBox x:Name="ModList"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     Padding="0"
+                     IsEnabled="{Binding CanModify}"
+                     SelectionMode="Multiple"
+                     ItemsSource="{Binding Mods}"
+                     SelectionChanged="OnModSelectionChanged">
+                <ListBox.ContextMenu>
+                    <ContextMenu Opening="OnContextMenuOpening">
+                        <MenuItem Header="启用选中模组" Tag="enable" Click="OnEnableSelectedClick" />
+                        <MenuItem Header="禁用选中模组" Tag="disable" Click="OnDisableSelectedClick" />
+                        <Separator />
+                        <MenuItem Header="在资源管理器中显示" Tag="reveal" Click="OnRevealInExplorerClick" />
+                        <MenuItem Header="刷新" Tag="refresh" Click="OnRefreshClick" />
+                    </ContextMenu>
+                </ListBox.ContextMenu>
 
-            <!-- 左侧快速访问 -->
-            <Border Grid.Column="0" Background="{DynamicResource AppPaneBackground}" Padding="8,10">
-                <DockPanel LastChildFill="True">
-                    <TextBlock DockPanel.Dock="Top"
-                               Text="快速访问"
-                               Margin="8,2,8,8"
-                               FontSize="12"
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="MinHeight" Value="36" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    </Style>
+                </ListBox.Styles>
+
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:ModItem">
+                        <Grid Height="36"
+                              Margin="8,0"
+                              ColumnDefinitions="36,*,160,90,140,110,26">
+                            <CheckBox Grid.Column="0"
+                                      IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      ToolTip.Tip="启用/禁用该模组（推送后同步到游戏）" />
+
+                            <Grid Grid.Column="1" ColumnDefinitions="Auto,*" Margin="0,0,12,0">
+                                <materialIcons:MaterialIcon Grid.Column="0"
+                                                            Kind="{Binding IconKind}"
+                                                            IconSize="18"
+                                                            VerticalAlignment="Center"
+                                                            Margin="0,0,7,0" />
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding DisplayName}"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding RelativePath}" />
+                            </Grid>
+
+                            <TextBlock Grid.Column="2"
+                                       Text="{Binding GroupDisplay}"
+                                       FontSize="12"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Classes="secondary" />
+                            <TextBlock Grid.Column="3" Text="{Binding SizeText}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,14,0" Classes="secondary" />
+                            <TextBlock Grid.Column="4" Text="{Binding ModifiedText}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="8,0,0,0" Classes="secondary" />
+                            <StackPanel Grid.Column="5"
+                                        Orientation="Horizontal"
+                                        Spacing="4"
+                                        VerticalAlignment="Center"
+                                        ToolTip.Tip="{Binding StatusDescription}">
+                                <materialIcons:MaterialIcon Kind="{Binding StatusIcon}"
+                                                            IconSize="15"
+                                                            VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding StatusText}"
+                                           FontSize="12"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"
+                                           Classes="secondary" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- 未选择模组库 / 路径失效 -->
+            <Border IsVisible="{Binding ShowWelcome}"
+                    Background="{DynamicResource AppContentBackground}">
+                <StackPanel HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Spacing="12"
+                            MaxWidth="540">
+                    <materialIcons:MaterialIcon Kind="FolderSearch"
+                                                IconSize="72"
+                                                Foreground="{DynamicResource AppAccentBrush}"
+                                                HorizontalAlignment="Center" />
+                    <TextBlock Text="选择一个模组库文件夹"
+                               FontSize="22"
                                FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="选择后只显示库内的 .vpk 模组。启用状态保存在应用数据中，推送时再同步到游戏 addons 目录。"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
                                Classes="secondary" />
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl ItemsSource="{Binding QuickPlaces}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="models:QuickPlace">
-                                    <Button Classes="flat"
-                                            HorizontalAlignment="Stretch"
-                                            HorizontalContentAlignment="Left"
-                                            Padding="10,7"
-                                            Margin="0,1"
-                                            Tag="{Binding Path}"
-                                            Click="OnQuickPlaceClick"
-                                            ToolTip.Tip="{Binding Path}">
-                                        <StackPanel Orientation="Horizontal" Spacing="9">
-                                            <materialIcons:MaterialIcon Kind="{Binding IconKind}" IconSize="16" />
-                                            <TextBlock Text="{Binding Name}"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Button>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </DockPanel>
+                    <TextBlock Text="{Binding Message}"
+                               IsVisible="{Binding LibraryUnavailable}"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               Foreground="#C42B1C" />
+                    <Button Content="选择模组库文件夹"
+                            Click="OnSelectLibraryClick"
+                            HorizontalAlignment="Center"
+                            Padding="18,8"
+                            Margin="0,6,0,0" />
+                </StackPanel>
             </Border>
 
-            <!-- 右侧文件列表 -->
-            <Grid Grid.Column="1" Background="{DynamicResource AppContentBackground}" RowDefinitions="Auto,*">
+            <!-- 模组库为空 -->
+            <Border IsVisible="{Binding IsEmptyLibrary}"
+                    Background="{DynamicResource AppContentBackground}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                    <materialIcons:MaterialIcon Kind="FileStar"
+                                                IconSize="64"
+                                                Foreground="{DynamicResource AppTextSecondaryBrush}"
+                                                HorizontalAlignment="Center" />
+                    <TextBlock Text="模组库中没有 .vpk 模组"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="把 VPK 文件放进模组库，或使用“导入模组”按钮。"
+                               Classes="secondary"
+                               HorizontalAlignment="Center" />
+                    <Button Content="导入模组"
+                            Click="OnImportClick"
+                            IsEnabled="{Binding CanImport}"
+                            HorizontalAlignment="Center"
+                            Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
 
-                <!-- 列头 -->
-                <Border Grid.Row="0"
-                        BorderBrush="{DynamicResource AppBorderBrush}"
-                        BorderThickness="0,0,0,1"
-                        Padding="12,0,12,0"
-                        Height="32">
-                    <Grid ColumnDefinitions="32,*,150,120,90,26">
-                        <Button Grid.Column="1"
-                                Classes="columnHeader"
-                                Content="{Binding NameHeader}"
-                                Click="OnSortNameClick" />
-                        <Button Grid.Column="2"
-                                Classes="columnHeader"
-                                Content="{Binding ModifiedHeader}"
-                                Click="OnSortModifiedClick" />
-                        <Button Grid.Column="3"
-                                Classes="columnHeader"
-                                Content="{Binding TypeHeader}"
-                                Click="OnSortTypeClick" />
-                        <Button Grid.Column="4"
-                                Classes="columnHeader"
-                                Content="{Binding SizeHeader}"
-                                HorizontalAlignment="Right"
-                                Click="OnSortSizeClick" />
-                    </Grid>
-                </Border>
-
-                <Grid Grid.Row="1">
-                    <ListBox x:Name="FileList"
-                             Background="Transparent"
-                             BorderThickness="0"
-                             Padding="0"
-                             SelectionMode="Multiple"
-                             ItemsSource="{Binding Entries}"
-                             SelectionChanged="OnFileSelectionChanged"
-                             DoubleTapped="OnFileListDoubleTapped"
-                             PointerPressed="OnFileListPointerPressed"
-                             PointerMoved="OnFileListPointerMoved">
-                        <ListBox.ContextMenu>
-                            <ContextMenu Opening="OnContextMenuOpening">
-                                <MenuItem Header="打开" Tag="open" Click="OnOpenEntryClick" />
-                                <MenuItem Header="在资源管理器中打开" Tag="reveal" Click="OnRevealInExplorerClick" />
-                                <Separator />
-                                <MenuItem Header="新建文件夹" Tag="newFolder" Click="OnNewFolderClick" />
-                                <MenuItem Header="新建文本文档" Tag="newFile" Click="OnNewTextFileClick" />
-                                <Separator />
-                                <MenuItem Header="复制" Tag="copy" Click="OnCopyClick" />
-                                <MenuItem Header="剪切" Tag="cut" Click="OnCutClick" />
-                                <MenuItem Header="粘贴" Tag="paste" Click="OnPasteClick" />
-                                <MenuItem Header="移动到…" Tag="moveTo" Click="OnMoveToClick" />
-                                <Separator />
-                                <MenuItem Header="重命名" Tag="rename" Click="OnRenameClick" />
-                                <MenuItem Header="删除" Tag="delete" Click="OnDeleteClick" />
-                                <Separator />
-                                <MenuItem Header="刷新" Tag="refresh" Click="OnRefreshClick" />
-                            </ContextMenu>
-                        </ListBox.ContextMenu>
-
-                        <ListBox.Styles>
-                            <Style Selector="ListBoxItem">
-                                <Setter Property="Padding" Value="0" />
-                                <Setter Property="MinHeight" Value="32" />
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                            </Style>
-                        </ListBox.Styles>
-
-                        <ListBox.ItemTemplate>
-                            <DataTemplate x:DataType="models:FileSystemEntry">
-                                <Grid Height="32"
-                                      Margin="12,0"
-                                      ColumnDefinitions="32,*,150,120,90,26"
-                                      Opacity="{Binding RowOpacity}">
-                                    <materialIcons:MaterialIcon Grid.Column="0"
-                                                                Kind="{Binding IconKind}"
-                                                                IconSize="18"
-                                                                HorizontalAlignment="Left"
-                                                                VerticalAlignment="Center" />
-
-                                    <Grid Grid.Column="1" Margin="0,0,12,0" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding Name}"
-                                                   IsVisible="{Binding !IsRenaming}"
-                                                   VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis" />
-                                        <TextBox x:Name="RenameBox"
-                                                 Text="{Binding EditName, Mode=OneWay}"
-                                                 IsVisible="{Binding IsRenaming}"
-                                                 FontSize="13"
-                                                 MinHeight="24"
-                                                 Height="24"
-                                                 Padding="4,0"
-                                                 VerticalAlignment="Center"
-                                                 KeyDown="OnRenameKeyDown"
-                                                 LostFocus="OnRenameLostFocus"
-                                                 AttachedToVisualTree="OnRenameBoxAttached" />
-                                    </Grid>
-
-                                    <TextBlock Grid.Column="2"
-                                               Text="{Binding ModifiedText}"
-                                               FontSize="12"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"
-                                               Classes="secondary" />
-                                    <TextBlock Grid.Column="3"
-                                               Text="{Binding TypeText}"
-                                               FontSize="12"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"
-                                               Classes="secondary" />
-                                    <TextBlock Grid.Column="4"
-                                               Text="{Binding SizeText}"
-                                               FontSize="12"
-                                               VerticalAlignment="Center"
-                                               HorizontalAlignment="Right"
-                                               Classes="secondary" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-
-                    <!-- 欢迎页：尚未选择文件夹 -->
-                    <Border IsVisible="{Binding ShowWelcome}"
-                            Background="{DynamicResource AppContentBackground}">
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="460">
-                            <materialIcons:MaterialIcon Kind="FolderSearch"
-                                                        IconSize="72"
-                                                        Foreground="{DynamicResource AppAccentBrush}"
-                                                        HorizontalAlignment="Center" />
-                            <TextBlock Text="选择一个文件夹开始"
-                                       FontSize="22"
-                                       FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" />
-                            <TextBlock Text="选好文件夹后，这里会列出其中的文件和子文件夹。你可以像在资源管理器中一样新建、重命名、移动、复制和删除项目。"
-                                       TextWrapping="Wrap"
-                                       TextAlignment="Center"
-                                       Classes="secondary" />
-                            <Button Content="选择文件夹"
-                                    Click="OnOpenFolderClick"
-                                    HorizontalAlignment="Center"
-                                    Padding="18,8"
-                                    Margin="0,6,0,0" />
-                        </StackPanel>
-                    </Border>
-
-                    <!-- 空文件夹 -->
-                    <Border IsVisible="{Binding IsEmptyFolder}"
-                            Background="{DynamicResource AppContentBackground}">
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                            <materialIcons:MaterialIcon Kind="FolderOpen"
-                                                        IconSize="64"
-                                                        Foreground="{DynamicResource AppTextSecondaryBrush}"
-                                                        HorizontalAlignment="Center" />
-                            <TextBlock Text="此文件夹为空"
-                                       FontSize="18"
-                                       FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" />
-                            <TextBlock Text="这里还没有任何内容，可以新建文件夹或把文件拖进来。"
-                                       Classes="secondary"
-                                       HorizontalAlignment="Center" />
-                            <Button Content="新建文件夹"
-                                    Click="OnNewFolderClick"
-                                    HorizontalAlignment="Center"
-                                    Margin="0,4,0,0" />
-                        </StackPanel>
-                    </Border>
-
-                    <!-- 搜索无结果 -->
-                    <Border IsVisible="{Binding HasNoResults}"
-                            Background="{DynamicResource AppContentBackground}">
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                            <materialIcons:MaterialIcon Kind="Magnify"
-                                                        IconSize="56"
-                                                        Foreground="{DynamicResource AppTextSecondaryBrush}"
-                                                        HorizontalAlignment="Center" />
-                            <TextBlock Text="没有匹配的项目"
-                                       FontSize="18"
-                                       FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" />
-                            <TextBlock Text="换个关键词试试，或清除搜索条件。"
-                                       Classes="secondary"
-                                       HorizontalAlignment="Center" />
-                            <Button Content="清除搜索"
-                                    Click="OnClearSearchClick"
-                                    HorizontalAlignment="Center"
-                                    Margin="0,4,0,0" />
-                        </StackPanel>
-                    </Border>
-                </Grid>
-            </Grid>
+            <!-- 筛选无结果 -->
+            <Border IsVisible="{Binding HasNoResults}"
+                    Background="{DynamicResource AppContentBackground}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                    <materialIcons:MaterialIcon Kind="Magnify"
+                                                IconSize="56"
+                                                Foreground="{DynamicResource AppTextSecondaryBrush}"
+                                                HorizontalAlignment="Center" />
+                    <TextBlock Text="没有匹配的模组"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="换个关键词，或清除分组/状态筛选。"
+                               Classes="secondary"
+                               HorizontalAlignment="Center" />
+                    <Button Content="清除筛选"
+                            Click="OnClearFiltersClick"
+                            HorizontalAlignment="Center"
+                            Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
         </Grid>
 
-        <!-- ================= 状态栏 ================= -->
+        <!-- ================= 底部状态与操作 ================= -->
         <Border Grid.Row="3"
                 Background="{DynamicResource AppStatusBackground}"
                 BorderBrush="{DynamicResource AppBorderBrush}"
                 BorderThickness="0,1,0,0"
-                Padding="14,6">
+                Padding="14,7">
             <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="14">
-                    <TextBlock Text="{Binding StatusText}" FontSize="12" Classes="secondary" />
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding ModSummary}" FontSize="12" Classes="secondary" />
                     <TextBlock Text="{Binding SelectionStatus}" FontSize="12" Classes="secondary" />
-                    <TextBlock Text="{Binding ClipboardStatus}" FontSize="12" Classes="secondary" />
+                    <TextBlock Text="{Binding FilterSummary}" FontSize="12" Classes="secondary" />
                 </StackPanel>
 
-                <TextBlock Grid.Column="1"
-                           Text="{Binding Message}"
-                           FontSize="12"
-                           Margin="18,0"
-                           TextTrimming="CharacterEllipsis"
-                           HorizontalAlignment="Left"
-                           VerticalAlignment="Center"
-                           Classes="secondary" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" Margin="18,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Message}"
+                               FontSize="12"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"
+                               Classes="secondary" />
+                    <TextBlock Text="{Binding GameStatusText}"
+                               IsVisible="{Binding !IsGameReady}"
+                               FontSize="12"
+                               Foreground="#C42B1C"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding BusyText}"
+                               FontSize="12"
+                               VerticalAlignment="Center"
+                               Classes="secondary"
+                               IsVisible="{Binding IsBusy}" />
+                    <ProgressBar Width="110"
+                                 Height="4"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding ProgressValue}"
+                                 IsIndeterminate="{Binding IsProgressIndeterminate}"
+                                 VerticalAlignment="Center"
+                                 IsVisible="{Binding IsBusy}" />
+                    <Button Content="取消"
+                            FontSize="11"
+                            Padding="8,2"
+                            Click="OnCancelOperationClick"
+                            IsVisible="{Binding CanCancel}" />
+                </StackPanel>
 
-                <ProgressBar Grid.Column="2"
-                             IsIndeterminate="True"
-                             Width="90"
-                             Height="4"
-                             VerticalAlignment="Center"
-                             IsVisible="{Binding IsLoading}" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Button Click="OnImportClick" IsEnabled="{Binding CanImport}" ToolTip.Tip="从本地导入 .vpk 模组">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <materialIcons:MaterialIcon Kind="FilePlus" IconSize="16" />
+                            <TextBlock Text="导入" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="flat" Click="OnWorkshopClick" IsEnabled="{Binding CanImport}" ToolTip.Tip="从创意工坊下载模组">
+                        <materialIcons:MaterialIcon Kind="CloudDownload" IconSize="18" />
+                    </Button>
+                    <Button Classes="flat" Click="OnCheckWorkshopUpdatesClick" IsEnabled="{Binding CanRefresh}" ToolTip.Tip="检查创意工坊更新">
+                        <materialIcons:MaterialIcon Kind="CloudRefresh" IconSize="18" />
+                    </Button>
+                    <Button Classes="flat" Click="OnRefreshClick" IsEnabled="{Binding CanRefresh}" ToolTip.Tip="重新扫描模组库（F5）">
+                        <materialIcons:MaterialIcon Kind="Refresh" IconSize="18" />
+                    </Button>
+                    <Button Click="OnPushClick" IsEnabled="{Binding CanPush}" ToolTip.Tip="{Binding GameStatusText}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <materialIcons:MaterialIcon Kind="Upload" IconSize="17" />
+                            <TextBlock Text="推送到游戏" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="flat" Click="OnSettingsClick" IsEnabled="{Binding CanOpenSettings}" ToolTip.Tip="设置">
+                        <materialIcons:MaterialIcon Kind="Cog" IconSize="18" />
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
     </Grid>

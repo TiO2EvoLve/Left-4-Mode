@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Left_4_Mod.Models;
 using Material.Icons;
@@ -9,7 +10,7 @@ using Material.Icons;
 namespace Left_4_Mod.Services;
 
 /// <summary>
-/// 与界面无关的文件系统操作：读取目录、复制/移动/删除、重名处理等。
+/// 与界面无关的文件系统辅助操作。调用方负责把路径限制在模组库范围内。
 /// </summary>
 public static class FileSystemService
 {
@@ -73,14 +74,18 @@ public static class FileSystemService
         [".cfg"] = "配置文件",
         [".ini"] = "配置设置",
         [".log"] = "日志文件",
-        [".vpk"] = "VPK 模组包",
-        [".vpks"] = "VPK 模组包",
+        [".vpk"] = "VPK 模组",
+        [".vpks"] = "VPK 模组",
         [".vmf"] = "VMF 地图源文件",
         [".bsp"] = "BSP 地图",
     };
 
     /// <summary>读取目录下一级内容。</summary>
-    public static List<FileSystemEntry> ReadEntries(string directoryPath)
+    public static List<FileSystemEntry> ReadEntries(
+        string directoryPath,
+        string relativeDirectory,
+        ILogService log,
+        CancellationToken cancellationToken = default)
     {
         var options = new EnumerationOptions
         {
@@ -94,11 +99,20 @@ public static class FileSystemService
 
         foreach (var info in new DirectoryInfo(directoryPath).EnumerateFileSystemInfos("*", options))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             try
             {
                 var isFolder = info is DirectoryInfo;
                 var size = 0L;
                 var modified = info.LastWriteTime;
+
+                // 导入过程中产生的中转文件不显示。
+                if (!isFolder &&
+                    info.Name.StartsWith(".l4m-import-", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
                 if (info is FileInfo fileInfo)
                 {
@@ -106,15 +120,42 @@ public static class FileSystemService
                 }
 
                 var isHidden = (info.Attributes & FileAttributes.Hidden) != 0;
-                entries.Add(new FileSystemEntry(info.FullName, isFolder, size, modified, isHidden));
+                var relativePath = CombineRelative(relativeDirectory, info.Name);
+
+                entries.Add(new FileSystemEntry(
+                    info.FullName,
+                    relativePath,
+                    isFolder,
+                    size,
+                    modified,
+                    isHidden));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // 单个项目读取失败（权限、链接损坏等）时跳过，不影响整个目录。
+                log.Warn($"跳过无法读取的项目：{info.FullName}（{ex.Message}）");
             }
         }
 
         return entries;
+    }
+
+    public static FileSystemEntry ReadEntry(string fullPath, string relativePath)
+    {
+        FileSystemInfo info = Directory.Exists(fullPath)
+            ? new DirectoryInfo(fullPath)
+            : new FileInfo(fullPath);
+
+        var isFolder = info is DirectoryInfo;
+        var size = info is FileInfo file ? file.Length : 0L;
+        var hidden = (info.Attributes & FileAttributes.Hidden) != 0;
+
+        return new FileSystemEntry(
+            info.FullName,
+            relativePath,
+            isFolder,
+            size,
+            info.LastWriteTime,
+            hidden);
     }
 
     public static string GetTypeDisplayName(string path, bool isFolder)
@@ -334,7 +375,7 @@ public static class FileSystemService
             var attributes = File.GetAttributes(directory);
             if ((attributes & FileAttributes.ReparsePoint) != 0)
             {
-                // 不跟随符号链接/目录联接，避免循环复制。
+                // 不跟随符号链接/目录联接，避免循环复制或越出模组库。
                 continue;
             }
 
@@ -373,31 +414,12 @@ public static class FileSystemService
         }
     }
 
-    /// <summary>删除到回收站；Shell 操作失败时抛出异常。</summary>
     public static async Task DeleteToRecycleBinAsync(IReadOnlyList<string> paths)
     {
         var result = await ShellFileOperations.MoveToRecycleBinAsync(paths).ConfigureAwait(false);
         if (result != 0)
         {
             throw new IOException($"无法移入回收站（Shell 错误码 0x{result:X}）。");
-        }
-    }
-
-    /// <summary>永久删除（用于回收站不可用时的兜底）。</summary>
-    public static void DeletePermanently(IReadOnlyList<string> paths)
-    {
-        foreach (var path in paths)
-        {
-            if (Directory.Exists(path))
-            {
-                ClearReadOnlyRecursive(path);
-                Directory.Delete(path, recursive: true);
-            }
-            else if (File.Exists(path))
-            {
-                ClearReadOnly(path);
-                File.Delete(path);
-            }
         }
     }
 
@@ -429,84 +451,45 @@ public static class FileSystemService
         }
     }
 
-    /// <summary>从完整路径生成面包屑列表。</summary>
-    public static List<BreadcrumbItem> BuildBreadcrumbs(string path)
+    public static string CombineRelative(string parentRelativePath, string name)
     {
-        var breadcrumbs = new List<BreadcrumbItem>();
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath) ?? fullPath;
+        return string.IsNullOrEmpty(parentRelativePath)
+            ? name
+            : $"{parentRelativePath}\\{name}";
+    }
 
-        breadcrumbs.Add(new BreadcrumbItem(root, root, isLast: false));
+    public static string? GetParentRelative(string relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            return null;
+        }
 
-        var remainder = fullPath[root.Length..];
-        var segments = remainder.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+        var separatorIndex = relativePath.LastIndexOf('\\');
+        return separatorIndex < 0 ? string.Empty : relativePath[..separatorIndex];
+    }
+
+    /// <summary>生成面包屑列表，根节点始终是模组库本身。</summary>
+    public static List<BreadcrumbItem> BuildBreadcrumbs(string rootName, string relativePath)
+    {
+        var breadcrumbs = new List<BreadcrumbItem>
+        {
+            new(rootName, string.Empty, isLast: false, isRoot: true),
+        };
+
+        var current = string.Empty;
+        var segments = relativePath.Split(
+            ['\\', '/'],
             StringSplitOptions.RemoveEmptyEntries);
 
-        var current = root;
         foreach (var segment in segments)
         {
-            current = Path.Combine(current, segment);
-            breadcrumbs.Add(new BreadcrumbItem(segment, current, isLast: false));
+            current = CombineRelative(current, segment);
+            breadcrumbs.Add(new BreadcrumbItem(segment, current, isLast: false, isRoot: false));
         }
 
         var last = breadcrumbs[^1];
-        breadcrumbs[^1] = new BreadcrumbItem(last.Name, last.Path, isLast: true);
+        breadcrumbs[^1] = new BreadcrumbItem(last.Name, last.RelativePath, isLast: true, last.IsRoot);
         return breadcrumbs;
-    }
-
-    /// <summary>快捷访问：桌面、下载、文档、图片以及所有就绪的磁盘。</summary>
-    public static List<QuickPlace> BuildQuickPlaces()
-    {
-        var places = new List<QuickPlace>();
-
-        AddSpecialFolder(places, Environment.SpecialFolder.DesktopDirectory, "桌面", MaterialIconKind.DesktopClassic);
-        AddPathPlace(
-            places,
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
-            "下载",
-            MaterialIconKind.Download);
-        AddSpecialFolder(places, Environment.SpecialFolder.MyDocuments, "文档", MaterialIconKind.FileDocument);
-        AddSpecialFolder(places, Environment.SpecialFolder.MyPictures, "图片", MaterialIconKind.FileImage);
-
-        try
-        {
-            foreach (var drive in DriveInfo.GetDrives())
-            {
-                if (!drive.IsReady)
-                {
-                    continue;
-                }
-
-                var label = string.IsNullOrWhiteSpace(drive.VolumeLabel)
-                    ? drive.Name.TrimEnd(Path.DirectorySeparatorChar)
-                    : $"{drive.VolumeLabel} ({drive.Name.TrimEnd(Path.DirectorySeparatorChar)})";
-
-                places.Add(new QuickPlace(label, drive.RootDirectory.FullName, MaterialIconKind.Harddisk));
-            }
-        }
-        catch (Exception)
-        {
-            // 无法枚举磁盘时忽略。
-        }
-
-        return places;
-    }
-
-    private static void AddSpecialFolder(
-        List<QuickPlace> places,
-        Environment.SpecialFolder folder,
-        string name,
-        MaterialIconKind icon)
-    {
-        AddPathPlace(places, Environment.GetFolderPath(folder), name, icon);
-    }
-
-    private static void AddPathPlace(List<QuickPlace> places, string path, string name, MaterialIconKind icon)
-    {
-        if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
-        {
-            places.Add(new QuickPlace(name, path, icon));
-        }
     }
 }

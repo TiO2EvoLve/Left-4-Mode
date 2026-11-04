@@ -5,13 +5,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Left_4_Mod.Models;
 using Left_4_Mod.ViewModels;
 using SukiUI.Controls;
@@ -21,27 +19,17 @@ namespace Left_4_Mod.Views;
 
 public partial class MainWindow : SukiWindow
 {
-    /// <summary>应用内部拖放使用的格式（仅在本进程内传递路径，避免依赖系统剪贴板格式）。</summary>
-    private static readonly DataFormat<string[]> InternalPathsFormat =
-        DataFormat.CreateInProcessFormat<string[]>("l4mod-internal-paths");
-
     private MainViewModel? _viewModel;
-    private Point _dragOrigin;
-    private PointerPressedEventArgs? _dragPressedArgs;
-    private FileSystemEntry? _dragSourceEntry;
-    private bool _dragArmed;
     private bool _dialogOpen;
+    private DispatcherTimer? _workshopTimer;
 
     public MainWindow()
     {
         InitializeComponent();
 
-        DragDrop.SetAllowDrop(FileList, true);
-        FileList.AddHandler(DragDrop.DragOverEvent, OnFileListDragOver);
-        FileList.AddHandler(DragDrop.DropEvent, OnFileListDrop);
-
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         Opened += OnWindowOpened;
+        Closing += OnWindowClosing;
         DataContextChanged += OnDataContextChanged;
     }
 
@@ -68,46 +56,77 @@ public partial class MainWindow : SukiWindow
         }
 
         await _viewModel.InitializeAsync();
+        StartWorkshopTimer();
 
-        // 若启动时通过命令行传入了文件夹，则直接打开；否则弹出选择文件夹对话框。
-        if (_viewModel.StartupFolder is { } startupFolder &&
-            await _viewModel.OpenFolderAsync(startupFolder))
+        if (_viewModel.HasLibrary)
         {
-            FileList.Focus();
+            await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+            ModList.Focus();
             return;
         }
 
-        await PickAndOpenFolderAsync();
+        if (_viewModel.AutoPromptLibrary)
+        {
+            await PickLibraryAsync();
+        }
+    }
+
+    private void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        _workshopTimer?.Stop();
+        _ = _viewModel?.SaveSettingsAsync();
+    }
+
+    private void StartWorkshopTimer()
+    {
+        _workshopTimer?.Stop();
+        _workshopTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMinutes(30),
+        };
+        _workshopTimer.Tick += async (_, _) =>
+        {
+            if (_viewModel is { HasLibrary: true, IsBusy: false } && !_dialogOpen)
+            {
+                await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+            }
+        };
+        _workshopTimer.Start();
     }
 
     // =====================================================================
-    // 选择文件夹
+    // 模组库
     // =====================================================================
 
-    private async Task PickAndOpenFolderAsync()
+    private async Task PickLibraryAsync()
     {
         if (_viewModel is null)
         {
             return;
         }
 
-        var folder = await PickFolderAsync("选择要浏览的文件夹");
+        var folder = await PickFolderAsync("选择模组库文件夹", _viewModel.LibraryPath);
         if (folder is null)
         {
             return;
         }
 
-        if (await _viewModel.OpenFolderAsync(folder))
+        await _viewModel.SetLibraryAsync(folder);
+        if (_viewModel.HasLibrary)
         {
-            FileList.Focus();
+            await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+            ModList.Focus();
         }
     }
 
-    private async Task<string?> PickFolderAsync(string title)
+    private async void OnSelectLibraryClick(object? sender, RoutedEventArgs e) => await PickLibraryAsync();
+
+    private async Task<string?> PickFolderAsync(string title, string? currentPath)
     {
         var storage = StorageProvider;
         if (storage is null || !storage.CanPickFolder)
         {
+            _viewModel?.ReportStatus("当前平台不支持选择文件夹。");
             return null;
         }
 
@@ -119,102 +138,55 @@ public partial class MainWindow : SukiWindow
 
         try
         {
-            if (_viewModel?.CurrentFolder is { } currentFolder &&
-                await storage.TryGetFolderFromPathAsync(currentFolder) is { } startFolder)
+            if (!string.IsNullOrWhiteSpace(currentPath) &&
+                await storage.TryGetFolderFromPathAsync(currentPath) is { } start)
             {
-                options.SuggestedStartLocation = startFolder;
+                options.SuggestedStartLocation = start;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 起始位置无效时忽略，不影响选择。
+            _viewModel?.ReportViewWarning($"无法设置选择框起始位置：{ex.Message}", ex);
         }
 
-        var folders = await storage.OpenFolderPickerAsync(options);
-        return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
-    }
-
-    // =====================================================================
-    // 工具栏 / 导航
-    // =====================================================================
-
-    private async void OnOpenFolderClick(object? sender, RoutedEventArgs e)
-    {
-        await PickAndOpenFolderAsync();
-    }
-
-    private async void OnBackClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is not null)
+        try
         {
-            await _viewModel.NavigateBackAsync();
+            var folders = await storage.OpenFolderPickerAsync(options);
+            return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
         }
-    }
-
-    private async void OnForwardClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is not null)
+        catch (Exception ex)
         {
-            await _viewModel.NavigateForwardAsync();
-        }
-    }
-
-    private async void OnUpClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is not null)
-        {
-            await _viewModel.NavigateUpAsync();
-        }
-    }
-
-    private async void OnRefreshClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is not null)
-        {
-            await _viewModel.RefreshAsync();
-        }
-    }
-
-    private async void OnBreadcrumbClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is not null && sender is Button { Tag: string path })
-        {
-            await _viewModel.OpenFolderAsync(path);
-        }
-    }
-
-    private async void OnQuickPlaceClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is not null && sender is Button { Tag: string path })
-        {
-            await _viewModel.OpenFolderAsync(path);
-        }
-    }
-
-    private async void OnAddressKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (_viewModel is null || sender is not TextBox box)
-        {
-            return;
-        }
-
-        if (e.Key == Key.Enter)
-        {
-            e.Handled = true;
-            await _viewModel.OpenFolderAsync(box.Text ?? string.Empty);
-            box.Text = _viewModel.CurrentFolder ?? string.Empty;
-            FileList.Focus();
-        }
-        else if (e.Key == Key.Escape)
-        {
-            e.Handled = true;
-            box.Text = _viewModel.CurrentFolder ?? string.Empty;
-            FileList.Focus();
+            _viewModel?.ReportViewError($"无法打开文件夹选择框：{ex.Message}", ex);
+            return null;
         }
     }
 
     // =====================================================================
-    // 搜索 / 排序
+    // 设置
+    // =====================================================================
+
+    private async void OnSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (await OpenSettingsAsync() &&
+            _viewModel is { HasLibrary: true })
+        {
+            await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+        }
+    }
+
+    private async Task<bool> OpenSettingsAsync()
+    {
+        if (_viewModel is null)
+        {
+            return false;
+        }
+
+        var window = new SettingsWindow(_viewModel);
+        return await window.ShowDialog<bool>(this);
+    }
+
+    // =====================================================================
+    // 搜索、筛选、排序
     // =====================================================================
 
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
@@ -231,487 +203,338 @@ public partial class MainWindow : SukiWindow
         {
             e.Handled = true;
             SearchBox.Text = string.Empty;
-            FileList.Focus();
+            _viewModel?.ClearFilters();
+            ModList.Focus();
         }
         else if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            FileList.Focus();
+            ModList.Focus();
         }
     }
 
-    private void OnClearSearchClick(object? sender, RoutedEventArgs e)
+    private void OnClearFiltersClick(object? sender, RoutedEventArgs e)
     {
         SearchBox.Text = string.Empty;
-        _viewModel?.ClearSearch();
-        FileList.Focus();
+        _viewModel?.ClearFilters();
+        ModList.Focus();
     }
 
     private void OnSortNameClick(object? sender, RoutedEventArgs e) => _viewModel?.SetSort("Name");
 
-    private void OnSortModifiedClick(object? sender, RoutedEventArgs e) => _viewModel?.SetSort("Modified");
-
-    private void OnSortTypeClick(object? sender, RoutedEventArgs e) => _viewModel?.SetSort("Type");
+    private void OnSortGroupClick(object? sender, RoutedEventArgs e) => _viewModel?.SetSort("Group");
 
     private void OnSortSizeClick(object? sender, RoutedEventArgs e) => _viewModel?.SetSort("Size");
 
-    // =====================================================================
-    // 列表：选择、打开、拖放
-    // =====================================================================
-
-    private void OnFileSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        _viewModel?.SetSelection(FileList.SelectedItems?.OfType<FileSystemEntry>() ?? []);
-    }
-
-    private async void OnFileListDoubleTapped(object? sender, TappedEventArgs e)
-    {
-        if (_viewModel is null || _dialogOpen)
-        {
-            return;
-        }
-
-        var entry = GetEntryFromSource(e.Source);
-        if (entry is null || entry.IsRenaming)
-        {
-            return;
-        }
-
-        await _viewModel.OpenEntryAsync(entry);
-    }
-
-    private void OnFileListPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        _dragArmed = false;
-        _dragSourceEntry = null;
-        _dragPressedArgs = null;
-
-        if (_dialogOpen)
-        {
-            return;
-        }
-
-        var point = e.GetCurrentPoint(FileList);
-
-        if (point.Properties.IsRightButtonPressed)
-        {
-            // 与资源管理器一致：右键未选中的项目时，先选中它。
-            var rightClicked = GetEntryAt(e.GetPosition(FileList));
-            if (rightClicked is not null &&
-                _viewModel is not null &&
-                !_viewModel.SelectedEntries.Contains(rightClicked))
-            {
-                SelectEntry(rightClicked);
-            }
-
-            return;
-        }
-
-        if (!point.Properties.IsLeftButtonPressed)
-        {
-            return;
-        }
-
-        if (e.Source is Visual source && source.FindAncestorOfType<TextBox>() is not null)
-        {
-            return;
-        }
-
-        var position = e.GetPosition(FileList);
-        var entry = GetEntryAt(position);
-        if (entry is null)
-        {
-            return;
-        }
-
-        _dragOrigin = position;
-        _dragSourceEntry = entry;
-        _dragPressedArgs = e;
-        _dragArmed = true;
-    }
-
-    private async void OnFileListPointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (!_dragArmed || _dragPressedArgs is null || _dragSourceEntry is null || _viewModel is null)
-        {
-            return;
-        }
-
-        if (!e.GetCurrentPoint(FileList).Properties.IsLeftButtonPressed)
-        {
-            _dragArmed = false;
-            return;
-        }
-
-        var position = e.GetPosition(FileList);
-        if (Math.Abs(position.X - _dragOrigin.X) < 6 && Math.Abs(position.Y - _dragOrigin.Y) < 6)
-        {
-            return;
-        }
-
-        _dragArmed = false;
-
-        var selection = _viewModel.SelectedEntries;
-        var paths = selection.Count > 0 && selection.Contains(_dragSourceEntry)
-            ? selection.Select(item => item.FullPath).ToArray()
-            : [_dragSourceEntry.FullPath];
-
-        var transfer = new DataTransfer();
-        transfer.Add(DataTransferItem.Create(InternalPathsFormat, paths));
-
-        try
-        {
-            await DragDrop.DoDragDropAsync(_dragPressedArgs, transfer, DragDropEffects.Move);
-        }
-        catch (Exception)
-        {
-            // 拖放被取消时忽略。
-        }
-    }
-
-    private void OnFileListDragOver(object? sender, DragEventArgs e)
-    {
-        var hasInternal = e.DataTransfer.Contains(InternalPathsFormat);
-        var hasExternalFiles = e.DataTransfer.TryGetFiles() is { Length: > 0 };
-
-        e.DragEffects = hasInternal
-            ? DragDropEffects.Move
-            : hasExternalFiles
-                ? DragDropEffects.Copy
-                : DragDropEffects.None;
-    }
-
-    private async void OnFileListDrop(object? sender, DragEventArgs e)
-    {
-        if (_viewModel is null || _dialogOpen)
-        {
-            return;
-        }
-
-        var targetEntry = GetEntryAt(e.GetPosition(FileList));
-        var destination = targetEntry is { IsFolder: true }
-            ? targetEntry.FullPath
-            : _viewModel.CurrentFolder;
-
-        if (destination is null)
-        {
-            return;
-        }
-
-        if (e.DataTransfer.Contains(InternalPathsFormat))
-        {
-            var paths = e.DataTransfer.TryGetValue(InternalPathsFormat);
-            if (paths is { Length: > 0 })
-            {
-                await _viewModel.MoveIntoAsync(destination, paths);
-            }
-
-            return;
-        }
-
-        var files = e.DataTransfer.TryGetFiles();
-        if (files is { Length: > 0 })
-        {
-            var paths = files
-                .Select(item => item.TryGetLocalPath())
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Cast<string>()
-                .ToArray();
-
-            if (paths.Length > 0)
-            {
-                await _viewModel.CopyIntoAsync(destination, paths);
-            }
-        }
-    }
+    private void OnSortModifiedClick(object? sender, RoutedEventArgs e) => _viewModel?.SetSort("Modified");
 
     // =====================================================================
-    // 右键菜单 / 文件操作
+    // 列表操作
     // =====================================================================
 
-    private void OnContextMenuOpening(object? sender, CancelEventArgs e)
+    private void OnModSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (_viewModel is null || sender is not ContextMenu menu || _dialogOpen)
+        _viewModel?.SetSelection(ModList.SelectedItems?.OfType<ModItem>() ?? []);
+    }
+
+    private async void OnEnableSelectedClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is not null)
         {
-            if (_dialogOpen)
-            {
-                e.Cancel = true;
-            }
-
-            return;
-        }
-
-        var hasSelection = _viewModel.HasSelection;
-
-        foreach (var item in menu.Items.OfType<MenuItem>())
-        {
-            item.IsEnabled = item.Tag switch
-            {
-                "open" or "reveal" or "rename" or "delete" or "copy" or "cut" or "moveTo"
-                    => hasSelection,
-                "paste" => _viewModel.ClipboardStatus.Length > 0 && _viewModel.HasFolder,
-                "newFolder" or "newFile" or "refresh" => _viewModel.HasFolder,
-                _ => true,
-            };
+            await _viewModel.SetSelectedEnabledAsync(true);
         }
     }
 
-    private async void OnOpenEntryClick(object? sender, RoutedEventArgs e)
+    private async void OnDisableSelectedClick(object? sender, RoutedEventArgs e)
     {
-        if (_viewModel is null)
+        if (_viewModel is not null)
         {
-            return;
+            await _viewModel.SetSelectedEnabledAsync(false);
         }
+    }
 
-        var entry = _viewModel.SelectedEntries.FirstOrDefault();
-        if (entry is not null)
+    private async void OnRefreshClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is not null)
         {
-            await _viewModel.OpenEntryAsync(entry);
+            await _viewModel.RefreshAsync();
         }
     }
 
     private void OnRevealInExplorerClick(object? sender, RoutedEventArgs e)
     {
-        var entry = _viewModel?.SelectedEntries.FirstOrDefault();
-        if (entry is null)
+        var item = _viewModel?.SelectedMods.FirstOrDefault();
+        if (item is null)
         {
             return;
         }
 
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{entry.FullPath}\"")
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{item.FullPath}\"")
             {
                 UseShellExecute = true,
             });
         }
         catch (Exception ex)
         {
-            _viewModel?.ReportStatus($"无法打开资源管理器：{ex.Message}");
+            _viewModel?.ReportViewError($"无法打开资源管理器：{ex.Message}", ex);
         }
     }
 
-    private async void OnNewFolderClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is null || !_viewModel.HasFolder)
-        {
-            return;
-        }
-
-        var entry = await _viewModel.CreateFolderAsync();
-        if (entry is not null)
-        {
-            SelectEntry(entry);
-            BeginRename(entry);
-        }
-    }
-
-    private async void OnNewTextFileClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is null || !_viewModel.HasFolder)
-        {
-            return;
-        }
-
-        var entry = await _viewModel.CreateTextFileAsync();
-        if (entry is not null)
-        {
-            SelectEntry(entry);
-            BeginRename(entry);
-        }
-    }
-
-    private void OnCopyClick(object? sender, RoutedEventArgs e) => _viewModel?.CopySelection();
-
-    private void OnCutClick(object? sender, RoutedEventArgs e) => _viewModel?.CutSelection();
-
-    private async void OnPasteClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is not null)
-        {
-            await _viewModel.PasteAsync();
-        }
-    }
-
-    private async void OnMoveToClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is null || !_viewModel.HasSelection)
-        {
-            return;
-        }
-
-        var destination = await PickFolderAsync("选择要移动到的文件夹");
-        if (destination is null)
-        {
-            return;
-        }
-
-        await _viewModel.MoveSelectedToAsync(destination);
-    }
-
-    private void OnRenameClick(object? sender, RoutedEventArgs e)
-    {
-        var entry = _viewModel?.SelectedEntries.FirstOrDefault();
-        if (entry is not null)
-        {
-            BeginRename(entry);
-        }
-    }
-
-    private async void OnDeleteClick(object? sender, RoutedEventArgs e)
-    {
-        if (_viewModel is null || !_viewModel.HasSelection)
-        {
-            return;
-        }
-
-        var selection = _viewModel.SelectedEntries.ToArray();
-        var count = selection.Length;
-        var preview = string.Join(
-            Environment.NewLine,
-            selection.Take(6).Select(item => "  • " + item.Name));
-
-        if (count > 6)
-        {
-            preview += Environment.NewLine + $"  … 以及另外 {count - 6} 项";
-        }
-
-        var message = $"确定要把以下 {count} 个项目移到回收站吗？{Environment.NewLine}{Environment.NewLine}" +
-                      $"{preview}{Environment.NewLine}{Environment.NewLine}之后可以从回收站还原。";
-
-        if (!await ConfirmAsync(message, "删除", "确认删除"))
-        {
-            return;
-        }
-
-        await _viewModel.DeleteSelectedAsync();
-    }
+    private void OnCancelOperationClick(object? sender, RoutedEventArgs e) => _viewModel?.CancelCurrentOperation();
 
     // =====================================================================
-    // 行内重命名
+    // 推送
     // =====================================================================
 
-    private void BeginRename(FileSystemEntry entry)
+    private async void OnPushClick(object? sender, RoutedEventArgs e)
     {
-        if (_viewModel is null)
+        if (_viewModel is null || !_viewModel.CanPush)
         {
             return;
         }
 
-        foreach (var item in _viewModel.Entries)
+        if (!_viewModel.IsGameReady)
         {
-            if (!ReferenceEquals(item, entry) && item.IsRenaming)
+            await OpenSettingsAsync();
+            if (!_viewModel.IsGameReady)
             {
-                item.CancelRename();
+                _viewModel.ReportStatus("请先在设置中配置 L4D2 游戏目录。");
+                return;
             }
         }
 
-        entry.BeginRename();
-        FileList.ScrollIntoView(entry);
-
-        // 等布局完成后再聚焦输入框（新建的行可能还没生成容器）。
-        Dispatcher.UIThread.Post(() => FocusRenameBox(entry), DispatcherPriority.Loaded);
-        Dispatcher.UIThread.Post(() => FocusRenameBox(entry), DispatcherPriority.Background);
-    }
-
-    private void FocusRenameBox(FileSystemEntry entry)
-    {
-        if (FileList.ContainerFromItem(entry) is not Control container)
+        var plan = await _viewModel.CreateDeploymentPlanAsync();
+        if (plan is null)
         {
             return;
         }
 
-        var textBox = container.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
-        if (textBox is null || !textBox.IsVisible)
+        if (!plan.HasChanges)
         {
-            return;
-        }
-
-        textBox.Focus();
-        textBox.SelectAll();
-    }
-
-    private void OnRenameBoxAttached(object? sender, VisualTreeAttachmentEventArgs e)
-    {
-        if (sender is not TextBox { DataContext: FileSystemEntry { IsRenaming: true } entry } textBox)
-        {
-            return;
-        }
-
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (textBox.IsVisible)
+            if (plan.ConflictCount > 0)
             {
-                textBox.Focus();
-                textBox.SelectAll();
+                await ShowInfoAsync(BuildConflictSummary(plan), "无法推送");
             }
-        }, DispatcherPriority.Loaded);
+            else
+            {
+                await ShowInfoAsync("当前启用状态已经同步，没有需要推送的变更。", "推送到游戏");
+            }
+
+            return;
+        }
+
+        var summary = BuildPushSummary(plan);
+        if (_viewModel.IsGameRunning())
+        {
+            summary += Environment.NewLine + Environment.NewLine +
+                       "检测到 L4D2 正在运行。推送后可能需要在游戏内刷新模组或重启游戏。";
+        }
+
+        if (!await ConfirmAsync(summary, "推送到游戏", "确认推送"))
+        {
+            return;
+        }
+
+        var result = await _viewModel.PushAsync(plan);
+        if (result is null)
+        {
+            return;
+        }
+
+        if (result.Failures.Count > 0)
+        {
+            var details = string.Join(
+                Environment.NewLine,
+                result.Failures.Take(10).Select(failure => $"• {failure.FileName}：{failure.Message}"));
+
+            if (result.Failures.Count > 10)
+            {
+                details += Environment.NewLine + $"… 以及另外 {result.Failures.Count - 10} 项失败";
+            }
+
+            await ShowInfoAsync(
+                $"推送完成：新增 {result.Added}，更新 {result.Updated}，移除 {result.Removed}，失败 {result.Failures.Count}。" +
+                $"{Environment.NewLine}{Environment.NewLine}{details}",
+                "推送结果");
+        }
     }
 
-    private async void OnRenameKeyDown(object? sender, KeyEventArgs e)
+    private string BuildPushSummary(DeploymentPlan plan)
     {
-        if (sender is not TextBox { DataContext: FileSystemEntry entry } textBox)
+        var details = new List<string>
+        {
+            $"游戏 addons 目录：{plan.AddonsPath}",
+            "推送方式：符号链接（不复制源文件）",
+            string.Empty,
+            $"新增：{plan.AddCount}    更新：{plan.UpdateCount}    移除：{plan.RemoveCount}    保持不变：{plan.KeepCount}",
+        };
+
+        if (plan.ConflictCount > 0)
+        {
+            details.Add(string.Empty);
+            details.Add($"冲突：{plan.ConflictCount} 项（这些项目不会被覆盖，将跳过）");
+            details.AddRange(BuildConflictSummary(plan)
+                .Split(Environment.NewLine)
+                .Where(line => line.StartsWith("•", StringComparison.Ordinal)));
+        }
+
+        details.Add(string.Empty);
+        details.Add("只会操作本管理器登记的 l4m_*.vpk 文件，不会删除你手动放入 addons 的文件。");
+
+        return string.Join(Environment.NewLine, details);
+    }
+
+    private static string BuildConflictSummary(DeploymentPlan plan)
+    {
+        var conflicts = plan.Items
+            .Where(item => item.IsConflict)
+            .Take(8)
+            .Select(item => $"• {item.DisplayName}：{item.Message}")
+            .ToArray();
+
+        return conflicts.Length == 0
+            ? "没有冲突。"
+            : "以下项目存在冲突，已跳过：" + Environment.NewLine + string.Join(Environment.NewLine, conflicts);
+    }
+
+    // =====================================================================
+    // 创意工坊
+    // =====================================================================
+
+    private async void OnWorkshopClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null || !_viewModel.CanImport)
         {
             return;
         }
 
-        if (e.Key == Key.Enter)
+        var window = new WorkshopWindow(_viewModel);
+        await window.ShowDialog<bool>(this);
+    }
+
+    private async void OnCheckWorkshopUpdatesClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null || !_viewModel.CanRefresh)
         {
-            e.Handled = true;
-            await CommitRenameAsync(entry, textBox.Text);
+            return;
         }
-        else if (e.Key == Key.Escape)
+
+        var result = await _viewModel.CheckWorkshopUpdatesAsync(automatic: false);
+        if (result is null)
         {
-            e.Handled = true;
-            entry.CancelRename();
-            FileList.Focus();
+            return;
+        }
+
+        if (result.Failures.Count > 0)
+        {
+            var details = string.Join(
+                Environment.NewLine,
+                result.Failures.Take(10).Select(failure =>
+                    $"• {failure.Title}：{failure.Message}"));
+
+            if (result.Failures.Count > 10)
+            {
+                details += Environment.NewLine + $"… 以及另外 {result.Failures.Count - 10} 项失败";
+            }
+
+            await ShowInfoAsync(
+                $"已检查 {result.CheckedCount} 个工坊模组，更新 {result.Updated.Count} 个，失败 {result.Failures.Count} 个。" +
+                $"{Environment.NewLine}{Environment.NewLine}{details}",
+                "创意工坊更新检查");
         }
     }
 
-    private async void OnRenameLostFocus(object? sender, RoutedEventArgs e)
+    // =====================================================================
+    // 导入
+    // =====================================================================
+
+    private async void OnImportClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is not TextBox { DataContext: FileSystemEntry entry } textBox || !entry.IsRenaming)
+        if (_viewModel is null || !_viewModel.CanImport)
         {
             return;
         }
 
-        await CommitRenameAsync(entry, textBox.Text);
+        var sourceFiles = await PickVpkFilesAsync();
+        if (sourceFiles.Count == 0)
+        {
+            return;
+        }
+
+        var plan = _viewModel.CreateImportPlan(sourceFiles);
+        if (plan is null || plan.Items.Count == 0)
+        {
+            _viewModel.ReportStatus("没有可导入的 .vpk 文件（已在本目录中的文件会被跳过）。");
+            return;
+        }
+
+        if (plan.RenamedCount > 0)
+        {
+            var message = $"有 {plan.RenamedCount} 个同名文件，将自动重命名后导入。是否继续？";
+            if (!await ConfirmAsync(message, "导入模组", "发现同名文件"))
+            {
+                return;
+            }
+        }
+
+        var outcome = await _viewModel.ImportAsync(plan);
+        if (outcome is null)
+        {
+            return;
+        }
+
+        if (outcome.Failures.Count > 0)
+        {
+            var details = string.Join(
+                Environment.NewLine,
+                outcome.Failures.Take(10).Select(failure => $"• {failure.FileName}：{failure.Message}"));
+
+            if (outcome.Failures.Count > 10)
+            {
+                details += Environment.NewLine + $"… 以及另外 {outcome.Failures.Count - 10} 个失败项";
+            }
+
+            await ShowInfoAsync(
+                $"成功导入 {outcome.ImportedRelativePaths.Count} 个文件，失败 {outcome.Failures.Count} 个。" +
+                $"{Environment.NewLine}{Environment.NewLine}{details}",
+                "导入结果");
+        }
     }
 
-    private async Task CommitRenameAsync(FileSystemEntry entry, string? text)
+    private async Task<IReadOnlyList<string>> PickVpkFilesAsync()
     {
-        if (_viewModel is null || !entry.IsRenaming)
+        var storage = StorageProvider;
+        if (storage is null || !storage.CanOpen)
         {
-            return;
+            _viewModel?.ReportStatus("当前平台不支持选择文件。");
+            return [];
         }
 
-        var newName = (text ?? string.Empty).Trim();
-        if (newName.Length == 0)
+        try
         {
-            entry.CancelRename();
-            return;
-        }
+            var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "导入 VPK 模组",
+                AllowMultiple = true,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("VPK 模组") { Patterns = ["*.vpk"] },
+                ],
+            });
 
-        var renamed = await _viewModel.RenameAsync(entry, newName);
-        if (renamed is null)
+            return files
+                .Select(file => file.TryGetLocalPath())
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Cast<string>()
+                .ToArray();
+        }
+        catch (Exception ex)
         {
-            entry.CancelRename();
-            return;
+            _viewModel?.ReportViewError($"无法打开文件选择框：{ex.Message}", ex);
+            return [];
         }
-
-        SelectEntry(renamed);
-    }
-
-    private void SelectEntry(FileSystemEntry entry)
-    {
-        if (FileList.SelectedItems is { } selectedItems)
-        {
-            selectedItems.Clear();
-            selectedItems.Add(entry);
-        }
-
-        _viewModel?.SetSelection([entry]);
-        FileList.ScrollIntoView(entry);
     }
 
     // =====================================================================
@@ -726,45 +549,28 @@ public partial class MainWindow : SukiWindow
         }
 
         var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
         var focusedIsTextInput = FocusManager?.GetFocusedElement() is TextBox;
+
+        if (control && e.Key == Key.F)
+        {
+            e.Handled = true;
+            SearchBox.Focus();
+            SearchBox.SelectAll();
+            return;
+        }
+
+        if (control && e.Key == Key.P)
+        {
+            e.Handled = true;
+            OnPushClick(this, new RoutedEventArgs());
+            return;
+        }
 
         if (control && e.Key == Key.O)
         {
             e.Handled = true;
-            await PickAndOpenFolderAsync();
+            await OpenSettingsAsync();
             return;
-        }
-
-        if (control && shift && e.Key == Key.N)
-        {
-            e.Handled = true;
-            OnNewFolderClick(this, new RoutedEventArgs());
-            return;
-        }
-
-        if (control && !focusedIsTextInput)
-        {
-            switch (e.Key)
-            {
-                case Key.C:
-                    e.Handled = true;
-                    _viewModel.CopySelection();
-                    return;
-                case Key.X:
-                    e.Handled = true;
-                    _viewModel.CutSelection();
-                    return;
-                case Key.V:
-                    e.Handled = true;
-                    await _viewModel.PasteAsync();
-                    return;
-                case Key.A:
-                    e.Handled = true;
-                    FileList.SelectAll();
-                    return;
-            }
         }
 
         if (focusedIsTextInput)
@@ -774,86 +580,54 @@ public partial class MainWindow : SukiWindow
 
         switch (e.Key)
         {
-            case Key.F2:
-                e.Handled = true;
-                OnRenameClick(this, new RoutedEventArgs());
-                return;
-            case Key.Delete:
-                e.Handled = true;
-                OnDeleteClick(this, new RoutedEventArgs());
-                return;
             case Key.F5:
                 e.Handled = true;
                 await _viewModel.RefreshAsync();
-                return;
-            case Key.Enter:
-                e.Handled = true;
-                await OpenFirstSelectedAsync();
-                return;
-            case Key.Back:
-                e.Handled = true;
-                await _viewModel.NavigateUpAsync();
                 return;
             case Key.Escape:
                 if (!string.IsNullOrEmpty(SearchBox.Text))
                 {
                     e.Handled = true;
                     SearchBox.Text = string.Empty;
-                    _viewModel.SearchText = string.Empty;
-                }
-                else if (_viewModel.HasSelection)
-                {
-                    e.Handled = true;
-                    FileList.SelectedItems?.Clear();
-                    _viewModel.SetSelection([]);
+                    _viewModel.ClearFilters();
                 }
 
                 return;
         }
-
-        if (alt && e.Key == Key.Left)
-        {
-            e.Handled = true;
-            await _viewModel.NavigateBackAsync();
-        }
-        else if (alt && e.Key == Key.Right)
-        {
-            e.Handled = true;
-            await _viewModel.NavigateForwardAsync();
-        }
     }
 
-    private async Task OpenFirstSelectedAsync()
+    // =====================================================================
+    // 右键菜单
+    // =====================================================================
+
+    private void OnContextMenuOpening(object? sender, CancelEventArgs e)
     {
-        if (_viewModel is null)
+        if (_viewModel is null || sender is not ContextMenu menu || _dialogOpen)
         {
+            if (_dialogOpen)
+            {
+                e.Cancel = true;
+            }
+
             return;
         }
 
-        var entry = _viewModel.SelectedEntries.FirstOrDefault();
-        if (entry is not null)
+        var hasSelection = _viewModel.HasSelection && !_viewModel.IsBusy;
+
+        foreach (var item in menu.Items.OfType<MenuItem>())
         {
-            await _viewModel.OpenEntryAsync(entry);
+            item.IsEnabled = item.Tag switch
+            {
+                "enable" or "disable" or "reveal" => hasSelection,
+                "refresh" => _viewModel.CanRefresh,
+                _ => true,
+            };
         }
     }
 
     // =====================================================================
-    // 辅助方法
+    // 对话框
     // =====================================================================
-
-    private FileSystemEntry? GetEntryFromSource(object? source)
-    {
-        return source is Visual visual
-            ? visual.FindAncestorOfType<ListBoxItem>()?.DataContext as FileSystemEntry
-            : null;
-    }
-
-    private FileSystemEntry? GetEntryAt(Point position)
-    {
-        return FileList.InputHitTest(position) is Visual visual
-            ? visual.FindAncestorOfType<ListBoxItem>()?.DataContext as FileSystemEntry
-            : null;
-    }
 
     private async Task<bool> ConfirmAsync(string message, string title, string header)
     {
@@ -878,8 +652,37 @@ public partial class MainWindow : SukiWindow
         }
         catch (Exception ex)
         {
-            _viewModel?.ReportStatus($"无法显示确认对话框：{ex.Message}");
+            _viewModel?.ReportViewWarning($"无法显示确认对话框：{ex.Message}", ex);
             return false;
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+    }
+
+    private async Task ShowInfoAsync(string message, string title)
+    {
+        if (_dialogOpen || !IsLoaded)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            await SukiMessageBox.ShowDialogResult(
+                this,
+                message,
+                SukiMessageBoxButtons.OK,
+                title,
+                title,
+                SukiMessageBoxIcons.Information,
+                null!);
+        }
+        catch (Exception ex)
+        {
+            _viewModel?.ReportViewWarning($"无法显示提示对话框：{ex.Message}", ex);
         }
         finally
         {
@@ -906,9 +709,9 @@ public partial class MainWindow : SukiWindow
                 SukiMessageBoxIcons.Error,
                 null!);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 弹窗失败时错误信息已经写入状态栏。
+            _viewModel?.ReportViewWarning($"无法显示错误对话框：{ex.Message}", ex);
         }
         finally
         {

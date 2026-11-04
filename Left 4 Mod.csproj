@@ -10,6 +10,9 @@
     <ItemGroup>
         <Folder Include="Models\"/>
         <AvaloniaResource Include="Assets\**"/>
+        <Compile Remove="tests\**\*.cs" />
+        <AvaloniaXaml Remove="tests\**" />
+        <None Remove="tests\**" />
     </ItemGroup>
 
     <ItemGroup>
@@ -24,6 +27,10 @@
         <PackageReference Include="Downloader" Version="6.0.1" />
         <PackageReference Include="Material.Icons.Avalonia" Version="3.0.2" />
         <PackageReference Include="ReactiveUI.Avalonia" Version="12.1.6" />
+        <PackageReference Include="ReactiveUI.Avalonia.DryIoc" Version="12.1.6" />
+        <PackageReference Include="ReactiveUI.SourceGenerators" Version="4.2.0" PrivateAssets="all" />
+        <PackageReference Include="Serilog" Version="4.4.0" />
+        <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
         <PackageReference Include="SukiUI" Version="7.0.1" />
         <PackageReference Include="ValveKeyValue" Version="0.80.0.542" />
         <PackageReference Include="ValvePak" Version="7.2.0.221" />

@@ -1,62 +1,117 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Left_4_Mod.Models;
 using Left_4_Mod.Services;
 using ReactiveUI;
+using ReactiveUI.SourceGenerators;
 
 namespace Left_4_Mod.ViewModels;
 
-public sealed class MainViewModel : ViewModelBase
+/// <summary>
+/// 模组管理主视图模型。文件操作通过服务完成，这里负责筛选、启用状态、推送和设置。
+/// </summary>
+public sealed partial class MainViewModel : ViewModelBase
 {
-    private readonly List<FileSystemEntry> _allEntries = [];
-    private readonly Stack<string> _backStack = new();
-    private readonly Stack<string> _forwardStack = new();
-    private readonly List<string> _clipboardPaths = [];
+    private readonly IModLibraryService _library;
+    private readonly IModCatalogService _catalogService;
+    private readonly IDeploymentService _deployment;
+    private readonly IGamePathService _gamePathService;
+    private readonly IWorkshopService _workshop;
+    private readonly ISettingsService _settings;
+    private readonly ILogService _log;
+    private readonly AppSettings _appSettings;
+    private readonly List<ModItem> _allMods = [];
 
-    private string? _currentFolder;
-    private string _addressText = string.Empty;
+    private CancellationTokenSource? _operationCts;
+    private ModCatalog? _catalog;
     private string _searchText = string.Empty;
-    private bool _isLoading;
     private string _sortField = "Name";
     private bool _sortDescending;
-    private string _message = string.Empty;
-    private bool _clipboardIsCut;
+    private GroupOption? _selectedGroup;
+    private FilterOption<ModEnabledFilter>? _selectedEnabledFilter;
+    private FilterOption<ModDeploymentFilter>? _selectedDeploymentFilter;
+    private bool _suppressStateSave;
+    private bool _suppressFilterApply;
+    private string _gameAddonsPath = string.Empty;
 
-    public MainViewModel()
+    [Reactive] private string _libraryName = string.Empty;
+    [Reactive] private string _libraryPath = string.Empty;
+    [Reactive] private bool _hasLibrary;
+    [Reactive] private bool _libraryUnavailable;
+    [Reactive] private bool _isBusy;
+    [Reactive] private string _busyText = string.Empty;
+    [Reactive] private double _progressValue;
+    [Reactive] private bool _isProgressIndeterminate = true;
+    [Reactive] private bool _canCancel;
+    [Reactive] private string _message = string.Empty;
+    [Reactive] private int _modCount;
+    [Reactive] private int _enabledCount;
+    [Reactive] private int _deployedCount;
+    [Reactive] private int _pendingCount;
+    [Reactive] private string _gamePath = string.Empty;
+    [Reactive] private string _gameStatusText = "未设置游戏目录。";
+    [Reactive] private bool _isGameReady;
+
+    public MainViewModel(
+        IModLibraryService library,
+        IModCatalogService catalogService,
+        IDeploymentService deployment,
+        IGamePathService gamePath,
+        IWorkshopService workshop,
+        ISettingsService settings,
+        ILogService log)
     {
-        QuickPlaces.CollectionChanged += (_, _) => this.RaisePropertyChanged(nameof(HasQuickPlaces));
+        _library = library;
+        _catalogService = catalogService;
+        _deployment = deployment;
+        _gamePathService = gamePath;
+        _workshop = workshop;
+        _settings = settings;
+        _log = log;
+        _appSettings = _settings.Load();
+
+        EnabledFilterOptions =
+        [
+            new FilterOption<ModEnabledFilter>("全部状态", ModEnabledFilter.All),
+            new FilterOption<ModEnabledFilter>("已启用", ModEnabledFilter.Enabled),
+            new FilterOption<ModEnabledFilter>("未启用", ModEnabledFilter.Disabled),
+        ];
+
+        DeploymentFilterOptions =
+        [
+            new FilterOption<ModDeploymentFilter>("全部部署状态", ModDeploymentFilter.All),
+            new FilterOption<ModDeploymentFilter>("已部署", ModDeploymentFilter.Deployed),
+            new FilterOption<ModDeploymentFilter>("未部署", ModDeploymentFilter.NotDeployed),
+        ];
+
+        _selectedEnabledFilter = EnabledFilterOptions[0];
+        _selectedDeploymentFilter = DeploymentFilterOptions[0];
+        GroupOptions.Add(new GroupOption("全部分组", null, 0));
+
+        RestoreLibrary();
+        RestoreGamePath();
+        UpdateStates();
     }
 
-    public ObservableCollection<FileSystemEntry> Entries { get; } = [];
+    public ObservableCollection<ModItem> Mods { get; } = [];
 
-    public ObservableCollection<FileSystemEntry> SelectedEntries { get; } = [];
+    public ObservableCollection<ModItem> SelectedMods { get; } = [];
 
-    public ObservableCollection<BreadcrumbItem> Breadcrumbs { get; } = [];
+    public ObservableCollection<GroupOption> GroupOptions { get; } = [];
 
-    public ObservableCollection<QuickPlace> QuickPlaces { get; } = [];
+    public IReadOnlyList<FilterOption<ModEnabledFilter>> EnabledFilterOptions { get; }
 
-    /// <summary>发生需要弹窗提示的错误时触发。</summary>
+    public IReadOnlyList<FilterOption<ModDeploymentFilter>> DeploymentFilterOptions { get; }
+
     public event Action<string>? ErrorRaised;
 
-    public string? CurrentFolder => _currentFolder;
-
-    /// <summary>启动参数中指定的文件夹（例如通过“打开方式”传入）。</summary>
-    public string? StartupFolder { get; set; }
-
-    public bool HasFolder => _currentFolder is not null;
-
-    public bool HasQuickPlaces => QuickPlaces.Count > 0;
-
-    public string AddressText
-    {
-        get => _addressText;
-        private set => this.RaiseAndSetIfChanged(ref _addressText, value);
-    }
+    public bool AutoPromptLibrary { get; private set; }
 
     public string SearchText
     {
@@ -70,68 +125,163 @@ public sealed class MainViewModel : ViewModelBase
 
             _searchText = value;
             this.RaisePropertyChanged();
-            ApplyView();
+            ApplyFilter();
         }
     }
 
-    public bool IsLoading
+    public GroupOption? SelectedGroup
     {
-        get => _isLoading;
-        private set
+        get => _selectedGroup;
+        set
         {
-            if (_isLoading == value)
+            if (ReferenceEquals(_selectedGroup, value))
             {
                 return;
             }
 
-            _isLoading = value;
+            _selectedGroup = value;
             this.RaisePropertyChanged();
-            UpdateStates();
+            ApplyFilter();
         }
     }
 
-    public bool CanGoBack => _backStack.Count > 0;
+    public FilterOption<ModEnabledFilter>? SelectedEnabledFilter
+    {
+        get => _selectedEnabledFilter;
+        set
+        {
+            if (ReferenceEquals(_selectedEnabledFilter, value))
+            {
+                return;
+            }
 
-    public bool CanGoForward => _forwardStack.Count > 0;
+            _selectedEnabledFilter = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(EnabledFilterIndex));
+            ApplyFilter();
+        }
+    }
 
-    public bool CanGoUp => _currentFolder is not null && Directory.GetParent(_currentFolder) is not null;
+    public FilterOption<ModDeploymentFilter>? SelectedDeploymentFilter
+    {
+        get => _selectedDeploymentFilter;
+        set
+        {
+            if (ReferenceEquals(_selectedDeploymentFilter, value))
+            {
+                return;
+            }
 
-    public bool HasSelection => SelectedEntries.Count > 0;
+            _selectedDeploymentFilter = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(DeploymentFilterIndex));
+            ApplyFilter();
+        }
+    }
 
-    public bool ShowWelcome => _currentFolder is null;
+    public int EnabledFilterIndex
+    {
+        get => (int)(SelectedEnabledFilter?.Value ?? ModEnabledFilter.All);
+        set
+        {
+            if (value < 0 || value >= EnabledFilterOptions.Count)
+            {
+                return;
+            }
 
-    public bool IsEmptyFolder =>
-        _currentFolder is not null &&
-        !IsLoading &&
-        Entries.Count == 0 &&
-        string.IsNullOrWhiteSpace(SearchText);
+            SelectedEnabledFilter = EnabledFilterOptions[value];
+        }
+    }
 
-    public bool HasNoResults =>
-        _currentFolder is not null &&
-        !IsLoading &&
-        Entries.Count == 0 &&
-        !string.IsNullOrWhiteSpace(SearchText);
+    public int DeploymentFilterIndex
+    {
+        get => (int)(SelectedDeploymentFilter?.Value ?? ModDeploymentFilter.All);
+        set
+        {
+            if (value < 0 || value >= DeploymentFilterOptions.Count)
+            {
+                return;
+            }
+
+            SelectedDeploymentFilter = DeploymentFilterOptions[value];
+        }
+    }
 
     public string WindowTitle =>
-        _currentFolder is null
-            ? "L4D2 模组管理器"
-            : $"{GetFolderDisplayName(_currentFolder)} — L4D2 模组管理器";
+        HasLibrary
+            ? $"{LibraryName} — L4D2 模组管理器"
+            : "L4D2 模组管理器";
+
+    public bool ShowWelcome => !HasLibrary;
+
+    public bool HasSelection => SelectedMods.Count > 0;
+
+    public bool CanModify => HasLibrary && !IsBusy;
+
+    public bool CanImport => HasLibrary && !IsBusy;
+
+    public bool CanPush => HasLibrary && !IsBusy;
+
+    public bool CanRefresh => HasLibrary && !IsBusy;
+
+    public bool CanOpenSettings => !IsBusy;
+
+    public bool IsFilterActive =>
+        !string.IsNullOrWhiteSpace(SearchText) ||
+        SelectedGroup?.RelativePath is not null ||
+        SelectedEnabledFilter?.Value != ModEnabledFilter.All ||
+        SelectedDeploymentFilter?.Value != ModDeploymentFilter.All;
+
+    public bool IsEmptyLibrary =>
+        HasLibrary && !IsBusy && ModCount == 0;
+
+    public bool HasNoResults =>
+        HasLibrary && !IsBusy && ModCount > 0 && Mods.Count == 0 && IsFilterActive;
+
+    public string FilterSummary
+    {
+        get
+        {
+            var parts = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(SearchText))
+            {
+                parts.Add($"搜索“{SearchText.Trim()}”");
+            }
+
+            if (SelectedGroup?.RelativePath is not null)
+            {
+                parts.Add($"分组：{SelectedGroup.DisplayName}");
+            }
+
+            if (SelectedEnabledFilter is not null &&
+                SelectedEnabledFilter.Value != ModEnabledFilter.All)
+            {
+                parts.Add(SelectedEnabledFilter.DisplayName);
+            }
+
+            if (SelectedDeploymentFilter is not null &&
+                SelectedDeploymentFilter.Value != ModDeploymentFilter.All)
+            {
+                parts.Add(SelectedDeploymentFilter.DisplayName);
+            }
+
+            return parts.Count == 0 ? "全部模组" : string.Join(" · ", parts);
+        }
+    }
 
     public string StatusText
     {
         get
         {
-            if (_currentFolder is null)
+            if (!HasLibrary)
             {
-                return "未选择文件夹";
+                return "未选择模组库";
             }
 
-            if (!string.IsNullOrWhiteSpace(SearchText))
-            {
-                return $"{Entries.Count} 个匹配项（共 {_allEntries.Count} 项）";
-            }
-
-            return $"{Entries.Count} 个项目";
+            return IsFilterActive
+                ? $"显示 {Mods.Count} / {ModCount} 个模组"
+                : $"{ModCount} 个模组";
         }
     }
 
@@ -139,228 +289,180 @@ public sealed class MainViewModel : ViewModelBase
     {
         get
         {
-            if (SelectedEntries.Count == 0)
+            if (SelectedMods.Count == 0)
             {
                 return string.Empty;
             }
 
-            var files = SelectedEntries.Where(e => !e.IsFolder).ToArray();
-            if (files.Length == 0)
-            {
-                return $"已选择 {SelectedEntries.Count} 项";
-            }
-
-            var total = files.Sum(e => e.Size);
-            return $"已选择 {SelectedEntries.Count} 项 · {FileSystemService.FormatSize(total)}";
+            var enabled = SelectedMods.Count(item => item.IsEnabled);
+            return $"已选择 {SelectedMods.Count} 项 · 已启用 {enabled}";
         }
     }
 
-    public string Message
-    {
-        get => _message;
-        private set => this.RaiseAndSetIfChanged(ref _message, value);
-    }
-
-    public string ClipboardStatus
-    {
-        get
-        {
-            if (_clipboardPaths.Count == 0)
-            {
-                return string.Empty;
-            }
-
-            return _clipboardIsCut
-                ? $"剪贴板：已剪切 {_clipboardPaths.Count} 项"
-                : $"剪贴板：已复制 {_clipboardPaths.Count} 项";
-        }
-    }
-
-    public string SortField => _sortField;
-
-    public bool SortDescending => _sortDescending;
+    public string ModSummary =>
+        $"模组 {ModCount} · 已启用 {EnabledCount} · 已部署 {DeployedCount} · 待推送 {PendingCount}";
 
     public string NameHeader => BuildHeader("名称", "Name");
 
-    public string ModifiedHeader => BuildHeader("修改日期", "Modified");
-
-    public string TypeHeader => BuildHeader("类型", "Type");
+    public string GroupHeader => BuildHeader("分组", "Group");
 
     public string SizeHeader => BuildHeader("大小", "Size");
 
+    public string ModifiedHeader => BuildHeader("修改日期", "Modified");
+
     public async Task InitializeAsync()
     {
-        if (QuickPlaces.Count > 0)
+        if (!HasLibrary)
         {
+            AutoPromptLibrary = !LibraryUnavailable;
             return;
         }
 
-        var places = await Task.Run(FileSystemService.BuildQuickPlaces).ConfigureAwait(true);
-        foreach (var place in places)
+        await LoadCatalogAsync();
+    }
+
+    public async Task SetLibraryAsync(string path)
+    {
+        if (IsBusy)
         {
-            QuickPlaces.Add(place);
+            Message = "正在执行其他操作，请稍候。";
+            return;
+        }
+
+        try
+        {
+            _library.SetLibrary(path);
+            HasLibrary = true;
+            LibraryUnavailable = false;
+            LibraryName = _library.LibraryName;
+            LibraryPath = _library.RootPath ?? path;
+            AutoPromptLibrary = false;
+
+            _appSettings.LibraryPath = _library.RootPath;
+            await SaveSettingsAsync();
+
+            ClearCatalog();
+            await LoadCatalogAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail($"无法使用该模组库：{ex.Message}", ex);
         }
     }
 
-    public async Task<bool> OpenFolderAsync(string path, bool addHistory = true)
+    public async Task<(bool Success, string Error)> ApplySettingsAsync(
+        string libraryPath,
+        string gamePath)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        if (IsBusy)
         {
-            return false;
+            return (false, "正在执行其他操作，请稍候。");
         }
 
-        string fullPath;
-        try
+        var libraryChanged = false;
+
+        if (!string.IsNullOrWhiteSpace(libraryPath) && !Directory.Exists(libraryPath))
         {
-            fullPath = Path.GetFullPath(path.Trim().Trim('"'));
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"路径无效：{ex.Message}");
-            return false;
+            return (false, $"模组库目录不存在：{libraryPath}");
         }
 
-        if (!Directory.Exists(fullPath))
+        GamePathInfo? gameInfo = null;
+        if (!string.IsNullOrWhiteSpace(gamePath))
         {
-            RaiseError($"找不到文件夹：{fullPath}");
-            return false;
-        }
-
-        if (_currentFolder is not null && FileSystemService.PathsEqual(_currentFolder, fullPath))
-        {
-            await RefreshAsync();
-            return true;
-        }
-
-        IsLoading = true;
-        try
-        {
-            var entries = await Task.Run(() => FileSystemService.ReadEntries(fullPath)).ConfigureAwait(true);
-
-            if (addHistory && _currentFolder is not null)
+            gameInfo = _gamePathService.TryResolve(gamePath, out var gameError);
+            if (gameInfo is null)
             {
-                _backStack.Push(_currentFolder);
-                _forwardStack.Clear();
+                return (false, gameError);
             }
+        }
 
-            _allEntries.Clear();
-            _allEntries.AddRange(entries);
+        if (!string.IsNullOrWhiteSpace(libraryPath))
+        {
+            if (_library.RootPath is null ||
+                !FileSystemService.PathsEqual(_library.RootPath, libraryPath))
+            {
+                try
+                {
+                    _library.SetLibrary(libraryPath);
+                    HasLibrary = true;
+                    LibraryUnavailable = false;
+                    LibraryName = _library.LibraryName;
+                    LibraryPath = _library.RootPath ?? libraryPath;
+                    AutoPromptLibrary = false;
+                    libraryChanged = true;
+                }
+                catch (Exception ex)
+                {
+                    return (false, ex.Message);
+                }
+            }
+        }
 
-            SetCurrentFolder(fullPath);
-            ApplyView();
-            Message = $"已打开“{GetFolderDisplayName(fullPath)}”";
-            return true;
+        GamePath = gameInfo?.GameRoot ?? string.Empty;
+        _gameAddonsPath = gameInfo?.AddonsPath ?? string.Empty;
+        IsGameReady = gameInfo is not null;
+        GameStatusText = gameInfo is not null
+            ? $"游戏目录：{gameInfo.GameRoot}"
+            : "未设置游戏目录。";
+
+        _appSettings.LibraryPath = _library.RootPath;
+        _appSettings.GamePath = gameInfo?.GameRoot;
+        _appSettings.DeploymentStrategy = "SymbolicLink";
+
+        await SaveSettingsAsync();
+
+        if (libraryChanged)
+        {
+            ClearCatalog();
+            await LoadCatalogAsync();
+        }
+        else
+        {
+            await RefreshDeploymentStatesAsync();
+        }
+
+        return (true, string.Empty);
+    }
+
+    public async Task<(string? Path, string? Error)> DetectGamePathAsync()
+    {
+        try
+        {
+            return await Task.Run(() =>
+            {
+                var info = _gamePathService.AutoDetect(out var error);
+                return (info?.GameRoot, error);
+            }).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            RaiseError($"无法打开文件夹：{ex.Message}");
-            return false;
-        }
-        finally
-        {
-            IsLoading = false;
-            UpdateStates();
+            _log.Error(ex, "自动检测游戏路径失败");
+            return (null, $"自动检测失败：{ex.Message}");
         }
     }
 
     public async Task RefreshAsync()
     {
-        if (_currentFolder is null)
+        if (!HasLibrary || IsBusy)
         {
             return;
         }
 
-        var path = _currentFolder;
-        IsLoading = true;
-        try
-        {
-            var entries = await Task.Run(() => FileSystemService.ReadEntries(path)).ConfigureAwait(true);
-            _allEntries.Clear();
-            _allEntries.AddRange(entries);
-            ApplyView();
-            Message = "已刷新";
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"刷新失败：{ex.Message}");
-        }
-        finally
-        {
-            IsLoading = false;
-            UpdateStates();
-        }
+        await LoadCatalogAsync();
     }
 
-    public async Task<bool> NavigateBackAsync()
+    public void SetSelection(IEnumerable<ModItem> items)
     {
-        if (_backStack.Count == 0)
+        SelectedMods.Clear();
+        foreach (var item in items)
         {
-            return false;
-        }
-
-        var target = _backStack.Peek();
-        var previous = _currentFolder;
-
-        if (!await OpenFolderAsync(target, addHistory: false).ConfigureAwait(true))
-        {
-            return false;
-        }
-
-        _backStack.Pop();
-        if (previous is not null)
-        {
-            _forwardStack.Push(previous);
+            if (Mods.Contains(item))
+            {
+                SelectedMods.Add(item);
+            }
         }
 
         UpdateStates();
-        return true;
-    }
-
-    public async Task<bool> NavigateForwardAsync()
-    {
-        if (_forwardStack.Count == 0)
-        {
-            return false;
-        }
-
-        var target = _forwardStack.Peek();
-        var previous = _currentFolder;
-
-        if (!await OpenFolderAsync(target, addHistory: false).ConfigureAwait(true))
-        {
-            return false;
-        }
-
-        _forwardStack.Pop();
-        if (previous is not null)
-        {
-            _backStack.Push(previous);
-        }
-
-        UpdateStates();
-        return true;
-    }
-
-    public async Task<bool> NavigateUpAsync()
-    {
-        if (_currentFolder is null)
-        {
-            return false;
-        }
-
-        var parent = Directory.GetParent(_currentFolder);
-        if (parent is null)
-        {
-            Message = "已经到达根目录。";
-            return false;
-        }
-
-        return await OpenFolderAsync(parent.FullName).ConfigureAwait(true);
-    }
-
-    public void NavigateTo(string path)
-    {
-        _ = OpenFolderAsync(path);
     }
 
     public void SetSort(string field)
@@ -375,545 +477,800 @@ public sealed class MainViewModel : ViewModelBase
             _sortDescending = false;
         }
 
-        this.RaisePropertyChanged(nameof(SortField));
-        this.RaisePropertyChanged(nameof(SortDescending));
         this.RaisePropertyChanged(nameof(NameHeader));
-        this.RaisePropertyChanged(nameof(ModifiedHeader));
-        this.RaisePropertyChanged(nameof(TypeHeader));
+        this.RaisePropertyChanged(nameof(GroupHeader));
         this.RaisePropertyChanged(nameof(SizeHeader));
+        this.RaisePropertyChanged(nameof(ModifiedHeader));
 
-        ApplyView();
+        ApplyFilter();
     }
 
-    public void SetSelection(IEnumerable<FileSystemEntry> entries)
+    public async Task SetSelectedEnabledAsync(bool enabled)
     {
-        SelectedEntries.Clear();
-        foreach (var entry in entries)
-        {
-            SelectedEntries.Add(entry);
-        }
-
-        this.RaisePropertyChanged(nameof(HasSelection));
-        this.RaisePropertyChanged(nameof(SelectionStatus));
-    }
-
-    public void SelectAllVisible()
-    {
-        SetSelection(Entries);
-    }
-
-    public async Task<FileSystemEntry?> CreateFolderAsync()
-    {
-        if (_currentFolder is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            var path = FileSystemService.GetUniquePath(_currentFolder, "新建文件夹");
-            Directory.CreateDirectory(path);
-            await RefreshEntriesAsync();
-            Message = "已创建文件夹，输入名称后按回车确认。";
-            return Entries.FirstOrDefault(entry => FileSystemService.PathsEqual(entry.FullPath, path));
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"新建文件夹失败：{ex.Message}");
-            return null;
-        }
-    }
-
-    public async Task<FileSystemEntry?> CreateTextFileAsync()
-    {
-        if (_currentFolder is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            var path = FileSystemService.GetUniquePath(_currentFolder, "新建文本文档.txt");
-            await File.WriteAllTextAsync(path, string.Empty).ConfigureAwait(true);
-            await RefreshEntriesAsync();
-            Message = "已创建文本文档，输入名称后按回车确认。";
-            return Entries.FirstOrDefault(entry => FileSystemService.PathsEqual(entry.FullPath, path));
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"新建文件失败：{ex.Message}");
-            return null;
-        }
-    }
-
-    public async Task<FileSystemEntry?> RenameAsync(FileSystemEntry entry, string newName)
-    {
-        newName = newName.Trim();
-
-        if (!FileSystemService.IsValidEntryName(newName, out var error))
-        {
-            RaiseError(error);
-            return null;
-        }
-
-        var directory = Path.GetDirectoryName(entry.FullPath);
-        if (directory is null)
-        {
-            RaiseError("无法重命名该位置。");
-            return null;
-        }
-
-        var destination = Path.Combine(directory, newName);
-
-        if (string.Equals(newName, entry.Name, StringComparison.Ordinal))
-        {
-            entry.CancelRename();
-            return entry;
-        }
-
-        if (FileSystemService.PathsEqual(destination, entry.FullPath))
-        {
-            // 仅修改大小写：Windows 需要借助临时名称完成。
-            try
-            {
-                var temporary = Path.Combine(directory, Guid.NewGuid().ToString("N"));
-                if (entry.IsFolder)
-                {
-                    Directory.Move(entry.FullPath, temporary);
-                    Directory.Move(temporary, destination);
-                }
-                else
-                {
-                    File.Move(entry.FullPath, temporary);
-                    File.Move(temporary, destination);
-                }
-
-                entry.CancelRename();
-                await RefreshEntriesAsync();
-                Message = $"已重命名为“{newName}”";
-                return Entries.FirstOrDefault(item => FileSystemService.PathsEqual(item.FullPath, destination));
-            }
-            catch (Exception ex)
-            {
-                RaiseError($"重命名失败：{ex.Message}");
-                return null;
-            }
-        }
-
-        if (File.Exists(destination) || Directory.Exists(destination))
-        {
-            RaiseError($"当前文件夹中已存在名为“{newName}”的项目。");
-            return null;
-        }
-
-        try
-        {
-            if (entry.IsFolder)
-            {
-                Directory.Move(entry.FullPath, destination);
-            }
-            else
-            {
-                File.Move(entry.FullPath, destination);
-            }
-
-            entry.CancelRename();
-            await RefreshEntriesAsync();
-            Message = $"已重命名为“{newName}”";
-            return Entries.FirstOrDefault(item => FileSystemService.PathsEqual(item.FullPath, destination));
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"重命名失败：{ex.Message}");
-            return null;
-        }
-    }
-
-    public async Task DeleteSelectedAsync()
-    {
-        var paths = SelectedEntries.Select(entry => entry.FullPath).ToArray();
-        if (paths.Length == 0 || _currentFolder is null)
+        if (SelectedMods.Count == 0 || IsBusy)
         {
             return;
         }
 
+        _suppressStateSave = true;
         try
         {
-            var deletedFolder = _currentFolder;
-            await FileSystemService.DeleteToRecycleBinAsync(paths).ConfigureAwait(true);
-
-            Message = $"已将 {paths.Length} 个项目移到回收站（可从回收站还原）。";
-
-            if (!Directory.Exists(deletedFolder))
+            foreach (var item in SelectedMods)
             {
-                // 当前显示的文件夹本身被删除时，回到其父目录。
-                var parent = Directory.GetParent(deletedFolder)?.FullName
-                             ?? Path.GetPathRoot(deletedFolder);
-                if (parent is not null)
-                {
-                    await OpenFolderAsync(parent);
-                    return;
-                }
+                item.IsEnabled = enabled;
             }
-
-            await RefreshEntriesAsync();
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"删除失败：{ex.Message}");
-        }
-    }
-
-    public void CopySelection()
-    {
-        var paths = SelectedEntries.Select(entry => entry.FullPath).ToList();
-        if (paths.Count == 0)
-        {
-            return;
-        }
-
-        _clipboardPaths.Clear();
-        _clipboardPaths.AddRange(paths);
-        _clipboardIsCut = false;
-
-        foreach (var entry in _allEntries)
-        {
-            entry.IsCut = false;
-        }
-
-        Message = $"已复制 {paths.Count} 个项目。";
-        UpdateStates();
-    }
-
-    public void CutSelection()
-    {
-        var paths = SelectedEntries.Select(entry => entry.FullPath).ToList();
-        if (paths.Count == 0)
-        {
-            return;
-        }
-
-        _clipboardPaths.Clear();
-        _clipboardPaths.AddRange(paths);
-        _clipboardIsCut = true;
-
-        foreach (var entry in _allEntries)
-        {
-            entry.IsCut = paths.Contains(entry.FullPath, StringComparer.OrdinalIgnoreCase);
-        }
-
-        Message = $"已剪切 {paths.Count} 个项目，打开目标文件夹后粘贴即可移动。";
-        UpdateStates();
-    }
-
-    public async Task PasteAsync()
-    {
-        if (_currentFolder is null || _clipboardPaths.Count == 0)
-        {
-            Message = "剪贴板为空。";
-            return;
-        }
-
-        var destination = _currentFolder;
-        var sources = _clipboardPaths.ToArray();
-        var isCut = _clipboardIsCut;
-        var completed = 0;
-        var skipped = 0;
-
-        try
-        {
-            await Task.Run(() =>
-            {
-                foreach (var source in sources)
-                {
-                    if (!File.Exists(source) && !Directory.Exists(source))
-                    {
-                        skipped++;
-                        continue;
-                    }
-
-                    var sourceDirectory = Path.GetDirectoryName(source);
-
-                    if (isCut && sourceDirectory is not null &&
-                        FileSystemService.PathsEqual(sourceDirectory, destination))
-                    {
-                        continue;
-                    }
-
-                    if (FileSystemService.IsSameOrDescendant(destination, source))
-                    {
-                        // 不能把文件夹复制/移动到它自己或自己的子文件夹里。
-                        skipped++;
-                        continue;
-                    }
-
-                    var name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar));
-
-                    if (isCut)
-                    {
-                        var target = Path.Combine(destination, name);
-                        if (File.Exists(target) || Directory.Exists(target))
-                        {
-                            target = FileSystemService.GetUniquePath(destination, name);
-                        }
-
-                        FileSystemService.Move(source, target);
-                    }
-                    else
-                    {
-                        var target = FileSystemService.GetCopyPath(destination, name);
-                        FileSystemService.Copy(source, target);
-                    }
-
-                    completed++;
-                }
-            }).ConfigureAwait(true);
-
-            if (isCut)
-            {
-                _clipboardPaths.Clear();
-                _clipboardIsCut = false;
-                foreach (var entry in _allEntries)
-                {
-                    entry.IsCut = false;
-                }
-            }
-
-            await RefreshEntriesAsync();
-            Message = skipped > 0
-                ? $"已粘贴 {completed} 个项目，跳过 {skipped} 个（源文件夹与目标位置冲突）。"
-                : $"已粘贴 {completed} 个项目。";
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"粘贴失败：{ex.Message}");
         }
         finally
         {
+            _suppressStateSave = false;
+        }
+
+        UpdateCounts();
+        UpdateStates();
+        Message = enabled
+            ? $"已启用 {SelectedMods.Count} 个模组，推送到游戏后生效。"
+            : $"已禁用 {SelectedMods.Count} 个模组，再次推送会清理游戏目录中的部署。";
+
+        await PersistStateAsync();
+    }
+
+    public void ClearFilters()
+    {
+        SearchText = string.Empty;
+        SelectedGroup = GroupOptions.FirstOrDefault();
+        SelectedEnabledFilter = EnabledFilterOptions[0];
+        SelectedDeploymentFilter = DeploymentFilterOptions[0];
+    }
+
+    public ImportPlan? CreateImportPlan(IReadOnlyList<string> sourceFiles)
+    {
+        if (!HasLibrary)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _library.CreateImportPlan(GetImportTargetGroup(), sourceFiles);
+        }
+        catch (Exception ex)
+        {
+            Fail($"无法导入模组：{ex.Message}", ex);
+            return null;
+        }
+    }
+
+    public async Task<ImportOutcome?> ImportAsync(ImportPlan plan)
+    {
+        if (!HasLibrary || IsBusy)
+        {
+            return null;
+        }
+
+        var token = BeginOperation("正在导入模组…", indeterminate: false);
+        IsProgressIndeterminate = false;
+        ProgressValue = 0;
+
+        var progress = new Progress<ImportProgress>(update =>
+        {
+            if (!IsBusy)
+            {
+                return;
+            }
+
+            ProgressValue = update.Percentage;
+            BusyText = update.TotalFiles > 0
+                ? $"正在导入 {Math.Min(update.CompletedFiles + 1, update.TotalFiles)}/{update.TotalFiles}：{update.CurrentFileName}"
+                : "正在导入模组…";
+        });
+
+        ImportOutcome? outcome = null;
+
+        try
+        {
+            outcome = await _library.ImportAsync(plan, progress, token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "导入已取消。";
+        }
+        catch (Exception ex)
+        {
+            Fail($"导入失败：{ex.Message}", ex);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        if (outcome is not null)
+        {
+            await LoadCatalogAsync();
+            Message = outcome.Canceled
+                ? $"导入已取消，已成功导入 {outcome.ImportedRelativePaths.Count} 个文件。"
+                : $"已导入 {outcome.ImportedRelativePaths.Count} 个模组，默认未启用。";
+
+            if (outcome.RenamedCount > 0)
+            {
+                Message += $" {outcome.RenamedCount} 个同名文件已自动重命名。";
+            }
+        }
+
+        return outcome;
+    }
+
+    public async Task<WorkshopAddResult?> AddWorkshopModAsync(ulong publishedFileId)
+    {
+        if (!HasLibrary || IsBusy)
+        {
+            return null;
+        }
+
+        var token = BeginOperation("正在查询创意工坊…", indeterminate: false);
+        IsProgressIndeterminate = false;
+        ProgressValue = 0;
+
+        var progress = new Progress<WorkshopProgress>(update =>
+        {
+            if (!IsBusy)
+            {
+                return;
+            }
+
+            ProgressValue = update.OverallPercentage;
+            BusyText = update.Message;
+        });
+
+        WorkshopAddResult? result = null;
+        try
+        {
+            result = await _workshop.AddAsync(publishedFileId, progress, token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "创意工坊下载已取消。";
+        }
+        catch (Exception ex)
+        {
+            Fail($"创意工坊下载失败：{ex.Message}", ex);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        if (result is not null && result.Success)
+        {
+            await LoadCatalogAsync();
+            Message = result.WasUpdate
+                ? $"创意工坊模组已更新：{result.Details?.Title}。"
+                : $"已添加工坊模组：{result.Details?.Title}，默认未启用。";
+        }
+        else if (result is not null)
+        {
+            Message = result.Error ?? "创意工坊下载失败。";
+        }
+
+        return result;
+    }
+
+    public async Task<WorkshopUpdateResult?> CheckWorkshopUpdatesAsync(bool automatic)
+    {
+        if (!HasLibrary || IsBusy || _catalog is null)
+        {
+            return null;
+        }
+
+        var workshopCount = _catalog.State.Mods.Count(record => record.WorkshopId.HasValue);
+        if (workshopCount == 0)
+        {
+            if (!automatic)
+            {
+                Message = "模组库中没有创意工坊模组。";
+            }
+
+            return null;
+        }
+
+        var token = BeginOperation("正在检查创意工坊更新…", indeterminate: false);
+        IsProgressIndeterminate = false;
+        ProgressValue = 0;
+
+        var progress = new Progress<WorkshopProgress>(update =>
+        {
+            if (!IsBusy)
+            {
+                return;
+            }
+
+            ProgressValue = update.OverallPercentage;
+            BusyText = update.Message;
+        });
+
+        WorkshopUpdateResult? result = null;
+        try
+        {
+            result = await _workshop.CheckForUpdatesAsync(_catalog, progress, token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消创意工坊更新检查。";
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "检查创意工坊更新失败");
+            Message = $"检查创意工坊更新失败：{ex.Message}";
+            if (!automatic)
+            {
+                ErrorRaised?.Invoke(Message);
+            }
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        if (result is not null)
+        {
+            if (result.CheckedCount > 0)
+            {
+                await LoadCatalogAsync();
+            }
+
+            if (result.Updated.Count > 0)
+            {
+                Message = $"创意工坊更新完成：已更新 {result.Updated.Count} 个模组。";
+
+                if (IsGameRunning())
+                {
+                    Message += " 检测到游戏正在运行，请在游戏内刷新模组或重启游戏。";
+                }
+            }
+            else if (result.Canceled)
+            {
+                Message = "已取消创意工坊更新检查。";
+            }
+            else
+            {
+                Message = $"已检查 {result.CheckedCount} 个创意工坊模组，没有可用更新。";
+            }
+
+            if (result.Failures.Count > 0)
+            {
+                Message += $" 失败 {result.Failures.Count} 个。";
+                foreach (var failure in result.Failures)
+                {
+                    _log.Warn($"工坊更新失败：{failure.PublishedFileId} {failure.Title}：{failure.Message}");
+                }
+            }
+        }
+
+        return result;
+    }
+
+    public async Task<DeploymentPlan?> CreateDeploymentPlanAsync()
+    {
+        if (!HasLibrary)
+        {
+            return null;
+        }
+
+        if (!IsGameReady)
+        {
+            Message = "请先在设置中配置 L4D2 游戏目录。";
+            return null;
+        }
+
+        var token = BeginOperation("正在生成推送计划…", indeterminate: true);
+        try
+        {
+            var manifest = await _deployment.LoadManifestAsync(token).ConfigureAwait(true);
+            var plan = _deployment.CreatePlan(
+                _allMods.Select(item => item.Record).ToArray(),
+                manifest,
+                _gameAddonsPath);
+
+            if (_catalog is not null)
+            {
+                _catalog.Manifest = manifest;
+            }
+
+            return plan;
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消生成推送计划。";
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Fail($"无法生成推送计划：{ex.Message}", ex);
+            return null;
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    public async Task<DeploymentResult?> PushAsync(DeploymentPlan plan)
+    {
+        if (!HasLibrary || IsBusy)
+        {
+            return null;
+        }
+
+        var token = BeginOperation("正在推送到游戏…", indeterminate: false);
+        IsProgressIndeterminate = false;
+        ProgressValue = 0;
+
+        var progress = new Progress<DeploymentProgress>(update =>
+        {
+            if (!IsBusy)
+            {
+                return;
+            }
+
+            ProgressValue = update.Percentage;
+            BusyText = update.Total > 0
+                ? $"正在推送 {Math.Min(update.Completed + 1, update.Total)}/{update.Total}：{update.CurrentFile}"
+                : "正在推送到游戏…";
+        });
+
+        DeploymentResult? result = null;
+
+        try
+        {
+            result = await _deployment.ApplyAsync(plan, progress, token).ConfigureAwait(true);
+            Message = result.Canceled
+                ? $"推送已取消：新增 {result.Added}、更新 {result.Updated}、移除 {result.Removed}，失败 {result.Failures.Count}。"
+                : $"推送完成：新增 {result.Added}、更新 {result.Updated}、移除 {result.Removed}，失败 {result.Failures.Count}。";
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "推送已取消。";
+        }
+        catch (Exception ex)
+        {
+            Fail($"推送失败：{ex.Message}", ex);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        if (result is not null)
+        {
+            await RefreshDeploymentStatesAsync();
+        }
+
+        return result;
+    }
+
+    public void CancelCurrentOperation()
+    {
+        try
+        {
+            _operationCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            _log.Warn("取消操作时令牌已经释放。");
+        }
+    }
+
+    public bool IsGameRunning() => _gamePathService.IsGameRunning();
+
+    public void ReportStatus(string message) => Message = message;
+
+    public void ReportViewError(string message, Exception exception)
+    {
+        _log.Error(exception, message);
+        Message = message;
+        ErrorRaised?.Invoke(message);
+    }
+
+    public void ReportViewWarning(string message, Exception exception)
+    {
+        _log.Warn($"{message}（{exception.Message}）");
+        Message = message;
+    }
+
+    public async Task SaveSettingsAsync()
+    {
+        _appSettings.LibraryPath = _library.RootPath;
+        _appSettings.GamePath = IsGameReady ? GamePath : null;
+        _appSettings.DeploymentStrategy = "SymbolicLink";
+
+        try
+        {
+            await _settings.SaveAsync(_appSettings).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "保存设置失败");
+        }
+    }
+
+    private async Task<bool> LoadCatalogAsync()
+    {
+        if (!HasLibrary)
+        {
+            return false;
+        }
+
+        var token = BeginOperation("正在扫描模组库…", indeterminate: true);
+        try
+        {
+            var catalog = await _catalogService
+                .LoadAsync(IsGameReady ? _gameAddonsPath : null, token)
+                .ConfigureAwait(true);
+
+            foreach (var item in _allMods)
+            {
+                item.PropertyChanged -= OnModPropertyChanged;
+            }
+
+            _allMods.Clear();
+            _catalog = catalog;
+            _allMods.AddRange(catalog.Mods);
+
+            foreach (var item in _allMods)
+            {
+                item.PropertyChanged += OnModPropertyChanged;
+            }
+
+            BuildGroupOptions();
+            ApplyFilter();
+            UpdateCounts();
+
+            Message = _allMods.Count == 0
+                ? "模组库中没有找到 .vpk 模组。"
+                : $"已加载 {_allMods.Count} 个模组。";
+
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消扫描。";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Fail($"无法扫描模组库：{ex.Message}", ex);
+            return false;
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private void ClearCatalog()
+    {
+        foreach (var item in _allMods)
+        {
+            item.PropertyChanged -= OnModPropertyChanged;
+        }
+
+        _allMods.Clear();
+        _catalog = null;
+        Mods.Clear();
+        SelectedMods.Clear();
+
+        _suppressFilterApply = true;
+        try
+        {
+            GroupOptions.Clear();
+            GroupOptions.Add(new GroupOption("全部分组", null, 0));
+            _selectedGroup = GroupOptions[0];
+            this.RaisePropertyChanged(nameof(SelectedGroup));
+        }
+        finally
+        {
+            _suppressFilterApply = false;
+        }
+
+        UpdateCounts();
+        UpdateStates();
+    }
+
+    private async Task RefreshDeploymentStatesAsync()
+    {
+        if (_catalog is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _catalogService.RefreshDeploymentStatesAsync(
+                _catalog,
+                IsGameReady ? _gameAddonsPath : null,
+                CancellationToken.None).ConfigureAwait(true);
+
+            UpdateCounts();
+            UpdateStates();
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "刷新部署状态失败");
+            Message = $"刷新部署状态失败：{ex.Message}";
+        }
+    }
+
+    private void OnModPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not ModItem item)
+        {
+            return;
+        }
+
+        if (e.PropertyName == nameof(ModItem.IsEnabled))
+        {
+            UpdateCounts();
+            UpdateStates();
+            Message = item.IsEnabled
+                ? $"已启用“{item.DisplayName}”，推送到游戏后生效。"
+                : $"已禁用“{item.DisplayName}”，再次推送会清理游戏目录中的部署。";
+
+            if (!_suppressStateSave)
+            {
+                _ = PersistStateAsync();
+            }
+        }
+        else if (e.PropertyName == nameof(ModItem.DeploymentState))
+        {
+            UpdateCounts();
             UpdateStates();
         }
     }
 
-    public async Task MoveSelectedToAsync(string destinationFolder)
+    private async Task PersistStateAsync()
     {
-        var sources = SelectedEntries.Select(entry => entry.FullPath).ToArray();
-        await MoveIntoAsync(destinationFolder, sources).ConfigureAwait(true);
-    }
-
-    /// <summary>把指定项目移动到目标文件夹（拖放、剪切粘贴、移动到…共用）。</summary>
-    public async Task MoveIntoAsync(string destinationFolder, IReadOnlyList<string> sourcePaths)
-    {
-        if (sourcePaths.Count == 0 || !Directory.Exists(destinationFolder))
+        if (_catalog is null)
         {
             return;
         }
 
-        var moved = 0;
-        var skipped = 0;
+        try
+        {
+            await _catalogService.SaveStateAsync(_catalog.State).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "保存模组启用状态失败");
+            Message = $"保存启用状态失败：{ex.Message}";
+        }
+    }
+
+    private void RestoreLibrary()
+    {
+        var savedPath = _appSettings.LibraryPath;
+        if (string.IsNullOrWhiteSpace(savedPath))
+        {
+            return;
+        }
+
+        LibraryPath = savedPath;
+
+        if (!Directory.Exists(savedPath))
+        {
+            LibraryUnavailable = true;
+            Message = $"上次使用的模组库已不存在：{savedPath}";
+            return;
+        }
 
         try
         {
-            await Task.Run(() =>
-            {
-                foreach (var source in sourcePaths)
+            _library.SetLibrary(savedPath);
+            HasLibrary = true;
+            LibraryName = _library.LibraryName;
+            LibraryPath = _library.RootPath ?? savedPath;
+            _log.Info($"已恢复模组库：{LibraryPath}");
+        }
+        catch (Exception ex)
+        {
+            LibraryUnavailable = true;
+            Message = $"无法打开上次的模组库：{ex.Message}";
+            _log.Error(ex, "恢复模组库失败");
+        }
+    }
+
+    private void RestoreGamePath()
+    {
+        if (string.IsNullOrWhiteSpace(_appSettings.GamePath))
+        {
+            GameStatusText = "未设置游戏目录。";
+            return;
+        }
+
+        GamePath = _appSettings.GamePath;
+        var info = _gamePathService.TryResolve(_appSettings.GamePath, out var error);
+        if (info is null)
+        {
+            IsGameReady = false;
+            GameStatusText = $"游戏目录不可用：{error}";
+            _log.Warn($"恢复游戏路径失败：{error}");
+            return;
+        }
+
+        GamePath = info.GameRoot;
+        _gameAddonsPath = info.AddonsPath;
+        IsGameReady = true;
+        GameStatusText = $"游戏目录：{info.GameRoot}";
+    }
+
+    private void BuildGroupOptions()
+    {
+        var previousPath = _selectedGroup?.RelativePath;
+
+        _suppressFilterApply = true;
+        try
+        {
+            GroupOptions.Clear();
+            GroupOptions.Add(new GroupOption("全部分组", null, _allMods.Count));
+
+            var groups = _allMods
+                .GroupBy(item => item.GroupPath, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new
                 {
-                    if (!File.Exists(source) && !Directory.Exists(source))
-                    {
-                        skipped++;
-                        continue;
-                    }
+                    Path = group.Key,
+                    Count = group.Count(),
+                })
+                .OrderBy(group => group.Path.Length == 0 ? 0 : 1)
+                .ThenBy(group => group.Path, StringComparer.CurrentCultureIgnoreCase);
 
-                    var sourceDirectory = Path.GetDirectoryName(source);
-                    if (sourceDirectory is not null &&
-                        FileSystemService.PathsEqual(sourceDirectory, destinationFolder))
-                    {
-                        continue;
-                    }
-
-                    if (FileSystemService.IsSameOrDescendant(destinationFolder, source))
-                    {
-                        skipped++;
-                        continue;
-                    }
-
-                    var name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar));
-                    var target = Path.Combine(destinationFolder, name);
-                    if (File.Exists(target) || Directory.Exists(target))
-                    {
-                        target = FileSystemService.GetUniquePath(destinationFolder, name);
-                    }
-
-                    FileSystemService.Move(source, target);
-                    moved++;
-                }
-            }).ConfigureAwait(true);
-
-            await RefreshEntriesAsync();
-            Message = skipped > 0
-                ? $"已移动 {moved} 个项目，跳过 {skipped} 个（不能移动到自身内部）。"
-                : $"已移动 {moved} 个项目。";
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"移动失败：{ex.Message}");
-        }
-    }
-
-    /// <summary>把外部拖入的文件/文件夹复制到当前文件夹。</summary>
-    public async Task CopyIntoAsync(string destinationFolder, IReadOnlyList<string> sourcePaths)
-    {
-        if (sourcePaths.Count == 0 || !Directory.Exists(destinationFolder))
-        {
-            return;
-        }
-
-        var copied = 0;
-
-        try
-        {
-            await Task.Run(() =>
+            foreach (var group in groups)
             {
-                foreach (var source in sourcePaths)
-                {
-                    if (!File.Exists(source) && !Directory.Exists(source))
-                    {
-                        continue;
-                    }
+                var displayName = string.IsNullOrEmpty(group.Path)
+                    ? "未分类"
+                    : group.Path.Replace('\\', '/');
+                GroupOptions.Add(new GroupOption(displayName, group.Path, group.Count));
+            }
 
-                    if (FileSystemService.PathsEqual(Path.GetDirectoryName(source), destinationFolder))
-                    {
-                        continue;
-                    }
-
-                    var name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar));
-                    var target = FileSystemService.GetCopyPath(destinationFolder, name);
-                    FileSystemService.Copy(source, target);
-                    copied++;
-                }
-            }).ConfigureAwait(true);
-
-            await RefreshEntriesAsync();
-            Message = $"已复制 {copied} 个项目到当前文件夹。";
+            _selectedGroup = GroupOptions.FirstOrDefault(option =>
+                                 string.Equals(option.RelativePath, previousPath, StringComparison.OrdinalIgnoreCase))
+                             ?? GroupOptions[0];
+            this.RaisePropertyChanged(nameof(SelectedGroup));
         }
-        catch (Exception ex)
+        finally
         {
-            RaiseError($"复制失败：{ex.Message}");
+            _suppressFilterApply = false;
         }
     }
 
-    public async Task OpenEntryAsync(FileSystemEntry entry)
+    private void ApplyFilter()
     {
-        if (entry.IsFolder)
-        {
-            await OpenFolderAsync(entry.FullPath).ConfigureAwait(true);
-            return;
-        }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo(entry.FullPath) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            RaiseError($"无法打开“{entry.Name}”：{ex.Message}");
-        }
-    }
-
-    public void ClearSearch()
-    {
-        SearchText = string.Empty;
-    }
-
-    public void ReportStatus(string message) => Message = message;
-
-    private async Task RefreshEntriesAsync()
-    {
-        if (_currentFolder is null)
+        if (_suppressFilterApply)
         {
             return;
         }
 
-        var entries = await Task.Run(() => FileSystemService.ReadEntries(_currentFolder)).ConfigureAwait(true);
-        _allEntries.Clear();
-        _allEntries.AddRange(entries);
-        ApplyView();
-        UpdateStates();
-    }
+        IEnumerable<ModItem> query = _allMods;
 
-    private void SetCurrentFolder(string fullPath)
-    {
-        _currentFolder = fullPath;
-        AddressText = fullPath;
-
-        Breadcrumbs.Clear();
-        foreach (var breadcrumb in FileSystemService.BuildBreadcrumbs(fullPath))
+        if (SelectedGroup?.RelativePath is { } groupPath)
         {
-            Breadcrumbs.Add(breadcrumb);
+            query = query.Where(item =>
+                string.Equals(item.GroupPath, groupPath, StringComparison.OrdinalIgnoreCase));
         }
 
-        this.RaisePropertyChanged(nameof(CurrentFolder));
-        this.RaisePropertyChanged(nameof(HasFolder));
-        this.RaisePropertyChanged(nameof(WindowTitle));
-        this.RaisePropertyChanged(nameof(CanGoUp));
-        UpdateStates();
-    }
+        if (SelectedEnabledFilter?.Value == ModEnabledFilter.Enabled)
+        {
+            query = query.Where(item => item.IsEnabled);
+        }
+        else if (SelectedEnabledFilter?.Value == ModEnabledFilter.Disabled)
+        {
+            query = query.Where(item => !item.IsEnabled);
+        }
 
-    private void ApplyView()
-    {
-        IEnumerable<FileSystemEntry> query = _allEntries;
+        if (SelectedDeploymentFilter?.Value == ModDeploymentFilter.Deployed)
+        {
+            query = query.Where(item => item.DeploymentState == ModDeploymentState.Deployed);
+        }
+        else if (SelectedDeploymentFilter?.Value == ModDeploymentFilter.NotDeployed)
+        {
+            query = query.Where(item => item.DeploymentState != ModDeploymentState.Deployed);
+        }
 
         var search = SearchText.Trim();
         if (search.Length > 0)
         {
-            query = query.Where(entry =>
-                entry.Name.Contains(search, StringComparison.CurrentCultureIgnoreCase));
+            query = query.Where(item =>
+                item.DisplayName.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
+                item.FileName.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
+                item.GroupDisplay.Contains(search, StringComparison.CurrentCultureIgnoreCase));
         }
 
         var ordered = query
-            .OrderByDescending(entry => entry.IsFolder)
-            .ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase);
+            .OrderBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase);
 
         var sorted = _sortField switch
         {
-            "Modified" => _sortDescending
-                ? ordered.ThenByDescending(entry => entry.Modified)
-                : ordered.ThenBy(entry => entry.Modified),
-            "Type" => _sortDescending
-                ? ordered.ThenByDescending(entry => entry.TypeText, StringComparer.CurrentCultureIgnoreCase)
-                : ordered.ThenBy(entry => entry.TypeText, StringComparer.CurrentCultureIgnoreCase),
+            "Group" => _sortDescending
+                ? ordered.OrderByDescending(item => item.GroupDisplay, StringComparer.CurrentCultureIgnoreCase)
+                    .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                : ordered.OrderBy(item => item.GroupDisplay, StringComparer.CurrentCultureIgnoreCase)
+                    .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase),
             "Size" => _sortDescending
-                ? ordered.ThenByDescending(entry => entry.Size)
-                : ordered.ThenBy(entry => entry.Size),
+                ? ordered.ThenByDescending(item => item.Size)
+                : ordered.ThenBy(item => item.Size),
+            "Modified" => _sortDescending
+                ? ordered.ThenByDescending(item => item.LastModifiedUtc)
+                : ordered.ThenBy(item => item.LastModifiedUtc),
             _ => _sortDescending
-                ? ordered.ThenByDescending(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase)
-                : ordered.ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase),
+                ? ordered.ThenByDescending(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                : ordered.ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase),
         };
 
-        Entries.Clear();
-        foreach (var entry in sorted)
+        Mods.Clear();
+        foreach (var item in sorted)
         {
-            Entries.Add(entry);
+            Mods.Add(item);
         }
 
-        SelectedEntries.Clear();
-        this.RaisePropertyChanged(nameof(HasSelection));
-        this.RaisePropertyChanged(nameof(SelectionStatus));
+        SelectedMods.Clear();
+        UpdateCounts();
         UpdateStates();
+    }
+
+    private void UpdateCounts()
+    {
+        ModCount = _allMods.Count;
+        EnabledCount = _allMods.Count(item => item.IsEnabled);
+        DeployedCount = _allMods.Count(item => item.DeploymentState == ModDeploymentState.Deployed);
+        PendingCount = _allMods.Count(item =>
+            item.IsEnabled && item.DeploymentState != ModDeploymentState.Deployed);
     }
 
     private void UpdateStates()
     {
+        this.RaisePropertyChanged(nameof(WindowTitle));
+        this.RaisePropertyChanged(nameof(ShowWelcome));
+        this.RaisePropertyChanged(nameof(HasSelection));
+        this.RaisePropertyChanged(nameof(CanModify));
+        this.RaisePropertyChanged(nameof(CanImport));
+        this.RaisePropertyChanged(nameof(CanPush));
+        this.RaisePropertyChanged(nameof(CanRefresh));
+        this.RaisePropertyChanged(nameof(CanOpenSettings));
+        this.RaisePropertyChanged(nameof(IsFilterActive));
+        this.RaisePropertyChanged(nameof(FilterSummary));
+        this.RaisePropertyChanged(nameof(IsEmptyLibrary));
+        this.RaisePropertyChanged(nameof(HasNoResults));
         this.RaisePropertyChanged(nameof(StatusText));
         this.RaisePropertyChanged(nameof(SelectionStatus));
-        this.RaisePropertyChanged(nameof(HasSelection));
-        this.RaisePropertyChanged(nameof(ShowWelcome));
-        this.RaisePropertyChanged(nameof(IsEmptyFolder));
-        this.RaisePropertyChanged(nameof(HasNoResults));
-        this.RaisePropertyChanged(nameof(CanGoBack));
-        this.RaisePropertyChanged(nameof(CanGoForward));
-        this.RaisePropertyChanged(nameof(CanGoUp));
-        this.RaisePropertyChanged(nameof(WindowTitle));
-        this.RaisePropertyChanged(nameof(ClipboardStatus));
+        this.RaisePropertyChanged(nameof(ModSummary));
+    }
+
+    private string GetImportTargetGroup() =>
+        SelectedGroup?.RelativePath ?? string.Empty;
+
+    private CancellationToken BeginOperation(string text, bool indeterminate, bool canCancel = true)
+    {
+        _operationCts?.Dispose();
+        _operationCts = new CancellationTokenSource();
+
+        IsBusy = true;
+        BusyText = text;
+        IsProgressIndeterminate = indeterminate;
+        ProgressValue = 0;
+        CanCancel = canCancel;
+        UpdateStates();
+
+        return _operationCts.Token;
+    }
+
+    private void EndOperation()
+    {
+        _operationCts?.Dispose();
+        _operationCts = null;
+
+        IsBusy = false;
+        BusyText = string.Empty;
+        CanCancel = false;
+        IsProgressIndeterminate = true;
+        ProgressValue = 0;
+        UpdateStates();
     }
 
     private string BuildHeader(string label, string field)
@@ -926,16 +1283,14 @@ public sealed class MainViewModel : ViewModelBase
         return _sortDescending ? $"{label} ↓" : $"{label} ↑";
     }
 
-    private void RaiseError(string message)
+    private void Fail(string message, Exception? exception = null)
     {
+        if (exception is not null)
+        {
+            _log.Error(exception, message);
+        }
+
         Message = message;
         ErrorRaised?.Invoke(message);
-    }
-
-    private static string GetFolderDisplayName(string path)
-    {
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var name = Path.GetFileName(trimmed);
-        return string.IsNullOrEmpty(name) ? path : name;
     }
 }

@@ -1,13 +1,13 @@
 using System;
 using System.IO;
-using Material.Icons;
 using Left_4_Mod.Services;
+using Material.Icons;
 using ReactiveUI;
 
 namespace Left_4_Mod.Models;
 
 /// <summary>
-/// 文件列表中的一行（文件或文件夹）。
+/// 模组库文件列表中的一行（文件或文件夹）。
 /// </summary>
 public sealed class FileSystemEntry : ReactiveObject
 {
@@ -15,18 +15,26 @@ public sealed class FileSystemEntry : ReactiveObject
     private string _editName = string.Empty;
     private bool _isCut;
 
-    public FileSystemEntry(string fullPath, bool isFolder, long size, DateTime modified, bool isHidden)
+    public FileSystemEntry(
+        string fullPath,
+        string relativePath,
+        bool isFolder,
+        long size,
+        DateTime modified,
+        bool isHidden)
     {
         FullPath = fullPath;
+        RelativePath = relativePath;
         IsFolder = isFolder;
         Size = size;
         Modified = modified;
         IsHidden = isHidden;
+        IsMod = !isFolder &&
+                string.Equals(Path.GetExtension(fullPath), ".vpk", StringComparison.OrdinalIgnoreCase);
 
         Name = Path.GetFileName(fullPath);
         if (string.IsNullOrEmpty(Name))
         {
-            // 驱动器根目录（例如 "C:\"）没有文件名，退化为盘符。
             Name = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
@@ -42,7 +50,12 @@ public sealed class FileSystemEntry : ReactiveObject
 
     public string FullPath { get; }
 
+    /// <summary>相对于模组库根目录的路径（使用 Windows 分隔符）。</summary>
+    public string RelativePath { get; }
+
     public bool IsFolder { get; }
+
+    public bool IsMod { get; }
 
     public long Size { get; }
 
@@ -58,7 +71,6 @@ public sealed class FileSystemEntry : ReactiveObject
 
     public MaterialIconKind IconKind { get; }
 
-    /// <summary>是否为“剪切”状态（粘贴后消失）。</summary>
     public bool IsCut
     {
         get => _isCut;
@@ -69,21 +81,18 @@ public sealed class FileSystemEntry : ReactiveObject
         }
     }
 
-    /// <summary>是否正在行内重命名。</summary>
     public bool IsRenaming
     {
         get => _isRenaming;
         private set => this.RaiseAndSetIfChanged(ref _isRenaming, value);
     }
 
-    /// <summary>重命名输入框中的文本。</summary>
     public string EditName
     {
         get => _editName;
         set => this.RaiseAndSetIfChanged(ref _editName, value);
     }
 
-    /// <summary>行透明度：剪切项变淡，隐藏项稍淡。</summary>
     public double RowOpacity => IsCut ? 0.45 : IsHidden ? 0.7 : 1.0;
 
     public void BeginRename(string? initialName = null)
@@ -98,5 +107,5 @@ public sealed class FileSystemEntry : ReactiveObject
         EditName = Name;
     }
 
-    public override string ToString() => FullPath;
+    public override string ToString() => RelativePath;
 }
