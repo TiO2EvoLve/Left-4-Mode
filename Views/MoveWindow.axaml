@@ -1,0 +1,49 @@
+<sukiUi:SukiWindow xmlns="https://github.com/avaloniaui"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:sukiUi="clr-namespace:SukiUI.Controls;assembly=SukiUI"
+                   xmlns:models="using:Left_4_Mod.Models"
+                   x:Class="Left_4_Mod.Views.MoveWindow"
+                   Title="移动模组"
+                   Width="540"
+                   Height="300"
+                   CanResize="False"
+                   WindowStartupLocation="CenterOwner"
+                   ShowInTaskbar="False"
+                   Icon="/Assets/avalonia-logo.ico"
+                   IsMenuVisible="False"
+                   ShowBottomBorder="True">
+
+    <Grid Margin="20,16,20,16" RowDefinitions="Auto,Auto,*,Auto">
+        <TextBlock x:Name="MessageText"
+                   Grid.Row="0"
+                   FontSize="14"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,12" />
+
+        <TextBlock Grid.Row="1"
+                   Text="目标文件夹"
+                   FontSize="12"
+                   Classes="secondary"
+                   Margin="0,0,0,6" />
+
+        <ComboBox x:Name="ChoiceBox"
+                  Grid.Row="2"
+                  MinHeight="36"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Top">
+            <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="models:FolderChoice">
+                    <TextBlock Text="{Binding DisplayName}" />
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button Content="取消" Click="OnCancelClick" />
+            <Button Content="移动" Click="OnMoveClick" />
+        </StackPanel>
+    </Grid>
+</sukiUi:SukiWindow>

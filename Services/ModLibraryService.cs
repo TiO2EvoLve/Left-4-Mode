@@ -223,11 +223,45 @@ public sealed class ModLibraryService : IModLibraryService
             cancellationToken);
     }
 
+    public Task<IReadOnlyList<string>> EnumerateFoldersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureConfigured();
+        var root = _rootPath!;
+
+        return Task.Run<IReadOnlyList<string>>(
+            () =>
+            {
+                var result = new List<string>();
+                var options = new EnumerationOptions
+                {
+                    RecurseSubdirectories = true,
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.ReparsePoint,
+                };
+
+                foreach (var directory in Directory.EnumerateDirectories(root, "*", options))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var relativePath = Path.GetRelativePath(root, directory);
+                    if (relativePath.StartsWith(".l4m-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    result.Add(relativePath);
+                }
+
+                result.Sort(StringComparer.CurrentCultureIgnoreCase);
+                return result;
+            },
+            cancellationToken);
+    }
+
     public Task<FileSystemEntry> CreateFolderAsync(
         string parentRelativePath,
         string name,
-        CancellationToken cancellationToken)
-    {
+        CancellationToken cancellationToken)    {
         cancellationToken.ThrowIfCancellationRequested();
 
         var trimmedName = name.Trim();

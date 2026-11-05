@@ -276,7 +276,9 @@ public sealed class WorkshopService : IWorkshopService
             try
             {
                 var details = await GetDetailsAsync(workshopId, cancellationToken).ConfigureAwait(false);
-                var relativePath = GetWorkshopRelativePath(workshopId);
+                var relativePath = string.IsNullOrWhiteSpace(record.RelativePath)
+                    ? GetWorkshopRelativePath(workshopId)
+                    : record.RelativePath;
                 var fullPath = _library.GetFullPath(relativePath);
                 var oldTime = record.WorkshopTimeUpdated;
                 var needsDownload = !File.Exists(fullPath) || details.TimeUpdated > oldTime;

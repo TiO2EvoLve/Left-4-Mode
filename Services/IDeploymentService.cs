@@ -22,4 +22,14 @@ public interface IDeploymentService
         DeploymentPlan plan,
         IProgress<DeploymentProgress>? progress,
         CancellationToken cancellationToken);
+
+    /// <summary>删除指定模组已经登记的部署项（只删除清单登记的目标）。</summary>
+    Task RemoveModsAsync(
+        IReadOnlyCollection<string> modIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>在模组文件被移动/重命名后，把已登记的符号链接重新指向新路径。</summary>
+    Task UpdateModSourcesAsync(
+        IReadOnlyCollection<ModRecord> records,
+        CancellationToken cancellationToken = default);
 }

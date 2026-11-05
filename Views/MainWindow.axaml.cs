@@ -5,12 +5,15 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Left_4_Mod.Models;
+using Left_4_Mod.Services;
 using Left_4_Mod.ViewModels;
 using SukiUI.Controls;
 using SukiUI.MessageBox;
@@ -22,15 +25,109 @@ public partial class MainWindow : SukiWindow
     private MainViewModel? _viewModel;
     private bool _dialogOpen;
     private DispatcherTimer? _workshopTimer;
+    private ContextMenu? _openContextMenu;
+    private Flyout? _filterFlyout;
 
     public MainWindow()
     {
         InitializeComponent();
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(PointerPressedEvent, OnGlobalPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        Deactivated += OnWindowDeactivated;
         Opened += OnWindowOpened;
         Closing += OnWindowClosing;
         DataContextChanged += OnDataContextChanged;
+    }
+
+    private void OnGlobalPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_openContextMenu is not null &&
+            !IsVisualDescendantOf(e.Source as Visual, _openContextMenu))
+        {
+            _openContextMenu.Close();
+            _openContextMenu = null;
+        }
+
+        if (_filterFlyout is not null &&
+            !FilterButton.IsPointerOver &&
+            (FilterPanel is null || !IsVisualDescendantOf(e.Source as Visual, FilterPanel)))
+        {
+            _filterFlyout.Hide();
+            _filterFlyout = null;
+        }
+    }
+
+    private void OnWindowDeactivated(object? sender, EventArgs e) => CloseTransientUi();
+
+    private bool CloseTransientUi()
+    {
+        var closed = false;
+
+        if (_openContextMenu is not null)
+        {
+            _openContextMenu.Close();
+            _openContextMenu = null;
+            closed = true;
+        }
+
+        if (_filterFlyout is not null)
+        {
+            _filterFlyout.Hide();
+            _filterFlyout = null;
+            closed = true;
+        }
+
+        return closed;
+    }
+
+    private static bool IsVisualDescendantOf(Visual? source, Visual ancestor)
+    {
+        for (var current = source; current is not null; current = current.GetVisualParent())
+        {
+            if (ReferenceEquals(current, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void OnFilterFlyoutOpened(object? sender, EventArgs e) => _filterFlyout = sender as Flyout;
+
+    private void OnFilterFlyoutClosed(object? sender, EventArgs e)
+    {
+        if (ReferenceEquals(_filterFlyout, sender))
+        {
+            _filterFlyout = null;
+        }
+    }
+
+    private void OnFilterPanelKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            CloseTransientUi();
+        }
+    }
+
+    private void OnContextMenuClosed(object? sender, RoutedEventArgs e)
+    {
+        if (ReferenceEquals(_openContextMenu, sender))
+        {
+            _openContextMenu = null;
+        }
+    }
+
+    private void OnContextMenuKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            CloseTransientUi();
+        }
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -543,6 +640,12 @@ public partial class MainWindow : SukiWindow
 
     private async void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && CloseTransientUi())
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (_viewModel is null || _dialogOpen)
         {
             return;
@@ -600,6 +703,144 @@ public partial class MainWindow : SukiWindow
     // 右键菜单
     // =====================================================================
 
+    private void OnModListPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_viewModel is null ||
+            !e.GetCurrentPoint(ModList).Properties.IsRightButtonPressed ||
+            e.Source is not Visual source)
+        {
+            return;
+        }
+
+        var listBoxItem = source.FindAncestorOfType<ListBoxItem>(includeSelf: true);
+        if (listBoxItem?.DataContext is not ModItem mod)
+        {
+            return;
+        }
+
+        var selectedItems = ModList.SelectedItems;
+        if (selectedItems is null)
+        {
+            return;
+        }
+
+        if (!selectedItems.Contains(mod))
+        {
+            selectedItems.Clear();
+            selectedItems.Add(mod);
+        }
+    }
+
+    private async void OnNewFolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null || !_viewModel.CanModify)
+        {
+            return;
+        }
+
+        var parent = _viewModel.SelectedGroup?.RelativePath ?? string.Empty;
+        var parentDisplay = string.IsNullOrEmpty(parent)
+            ? "模组库根目录"
+            : parent.Replace('\\', '/');
+
+        var window = new NameWindow(
+            "新建文件夹",
+            $"将在“{parentDisplay}”下创建文件夹。",
+            string.Empty);
+
+        var name = await window.ShowDialog<string?>(this);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        var result = await _viewModel.CreateFolderAsync(name, parent);
+        if (!result.Success)
+        {
+            await ShowInfoAsync(result.Message, "新建文件夹");
+        }
+    }
+
+    private async void OnRenameSelectedClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null || _viewModel.SelectedMods.Count != 1)
+        {
+            return;
+        }
+
+        var item = _viewModel.SelectedMods[0];
+
+        var window = new NameWindow(
+            "重命名模组",
+            "输入新的文件名。若省略 .vpk 扩展名，会自动保留。",
+            item.FileName);
+
+        var name = await window.ShowDialog<string?>(this);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        var result = await _viewModel.RenameModAsync(item, name);
+        if (!result.Success)
+        {
+            await ShowInfoAsync(result.Message, "重命名模组");
+        }
+    }
+
+    private async void OnMoveSelectedClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null || _viewModel.SelectedMods.Count == 0)
+        {
+            return;
+        }
+
+        var selected = _viewModel.SelectedMods.ToList();
+        var choices = _viewModel.GetFolderChoices();
+        var initialPath = _viewModel.SelectedGroup?.RelativePath ?? string.Empty;
+
+        var window = new MoveWindow(selected.Count, choices, initialPath);
+        var destination = await window.ShowDialog<FolderChoice?>(this);
+        if (destination is null)
+        {
+            return;
+        }
+
+        var result = await _viewModel.MoveModsAsync(selected, destination.RelativePath);
+        if (!result.Success)
+        {
+            await ShowInfoAsync(result.Message, "移动模组");
+        }
+    }
+
+    private async void OnDeleteSelectedClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null || _viewModel.SelectedMods.Count == 0)
+        {
+            return;
+        }
+
+        var selected = _viewModel.SelectedMods.ToList();
+        var info = await _viewModel.GetDeleteInfoAsync(selected);
+        var size = FileSystemService.FormatSize(info.TotalBytes);
+
+        var message =
+            $"将选中的 {selected.Count} 个模组（{size}）移动到回收站？" +
+            $"{Environment.NewLine}{Environment.NewLine}" +
+            "已部署的符号链接会一并清理；之后仍可从回收站恢复文件。";
+
+        if (!await ConfirmAsync(message, "删除模组", "确认删除"))
+        {
+            return;
+        }
+
+        var result = await _viewModel.DeleteModsAsync(selected);
+        if (!result.Success)
+        {
+            await ShowInfoAsync(result.Message, "删除模组");
+        }
+    }
+
     private void OnContextMenuOpening(object? sender, CancelEventArgs e)
     {
         if (_viewModel is null || sender is not ContextMenu menu || _dialogOpen)
@@ -612,13 +853,19 @@ public partial class MainWindow : SukiWindow
             return;
         }
 
-        var hasSelection = _viewModel.HasSelection && !_viewModel.IsBusy;
+        _openContextMenu = menu;
+        var selected = _viewModel.SelectedMods;
+        var hasSelection = selected.Count > 0 && !_viewModel.IsBusy;
+        var hasSingleSelection = selected.Count == 1 && !_viewModel.IsBusy;
 
         foreach (var item in menu.Items.OfType<MenuItem>())
         {
             item.IsEnabled = item.Tag switch
             {
                 "enable" or "disable" or "reveal" => hasSelection,
+                "rename" => hasSingleSelection,
+                "move" or "delete" => hasSelection,
+                "newfolder" => _viewModel.CanModify,
                 "refresh" => _viewModel.CanRefresh,
                 _ => true,
             };

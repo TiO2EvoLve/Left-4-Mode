@@ -57,6 +57,10 @@ public sealed class ModLibraryTests
         Assert.Equal("新建文件夹", first.Name);
         Assert.Equal("新建文件夹 (2)", second.Name);
 
+        var folders = await library.EnumerateFoldersAsync();
+        Assert.Contains("新建文件夹", folders);
+        Assert.Contains("新建文件夹 (2)", folders);
+
         var renamed = await library.RenameAsync(first.RelativePath, "武器", default);
         Assert.Equal("武器", renamed);
         Assert.True(Directory.Exists(libraryDirectory.Combine("武器")));
@@ -387,6 +391,51 @@ public sealed class ModLibraryTests
         var keepPlan = deployment.CreatePlan([record], manifest, addonsDirectory.Path);
         Assert.Equal(1, keepPlan.KeepCount);
         Assert.False(keepPlan.HasChanges);
+    }
+
+    [Fact]
+    public async Task Deployment_retargets_and_removes_moved_mods()
+    {
+        using var libraryDirectory = new TempDirectory();
+        using var addonsDirectory = new TempDirectory();
+        using var appDataDirectory = new TempDirectory();
+
+        var source = libraryDirectory.Combine("mod.vpk");
+        File.WriteAllText(source, "moved-content");
+        var log = new RecordingLog();
+        var library = CreateLibrary(libraryDirectory.Path, log);
+        var deployment = new DeploymentService(library, log)
+        {
+            ManifestFilePath = appDataDirectory.Combine("deployments.json"),
+        };
+
+        var record = new ModRecord
+        {
+            Id = "move-id",
+            RelativePath = "mod.vpk",
+            IsEnabled = true,
+        };
+
+        var plan = deployment.CreatePlan([record], new DeploymentManifest(), addonsDirectory.Path);
+        await deployment.ApplyAsync(plan, null, CancellationToken.None);
+        var deployed = addonsDirectory.Combine("l4m_move-id.vpk");
+
+        Directory.CreateDirectory(libraryDirectory.Combine("分类"));
+        var movedSource = libraryDirectory.Combine("分类\\mod.vpk");
+        File.Move(source, movedSource);
+        record.RelativePath = "分类\\mod.vpk";
+
+        await deployment.UpdateModSourcesAsync([record]);
+
+        var target = File.ResolveLinkTarget(deployed, returnFinalTarget: true);
+        Assert.NotNull(target);
+        Assert.Equal(Path.GetFullPath(movedSource), target!.FullName);
+        Assert.Equal("moved-content", File.ReadAllText(deployed));
+
+        await deployment.RemoveModsAsync([record.Id]);
+
+        Assert.False(File.Exists(deployed));
+        Assert.True(File.Exists(movedSource));
     }
 
     [Fact]

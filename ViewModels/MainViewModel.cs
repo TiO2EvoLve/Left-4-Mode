@@ -27,6 +27,7 @@ public sealed partial class MainViewModel : ViewModelBase
     private readonly ILogService _log;
     private readonly AppSettings _appSettings;
     private readonly List<ModItem> _allMods = [];
+    private IReadOnlyList<string> _libraryFolders = [];
 
     private CancellationTokenSource? _operationCts;
     private ModCatalog? _catalog;
@@ -748,6 +749,383 @@ public sealed partial class MainViewModel : ViewModelBase
         return result;
     }
 
+    public IReadOnlyList<FolderChoice> GetFolderChoices()
+    {
+        var choices = new List<FolderChoice>
+        {
+            new(string.Empty, "模组库根目录（未分类）"),
+        };
+
+        choices.AddRange(_libraryFolders.Select(path =>
+            new FolderChoice(path, path.Replace('\\', '/'))));
+
+        return choices;
+    }
+
+    public async Task<DeleteInfo> GetDeleteInfoAsync(IReadOnlyList<ModItem> items)
+    {
+        if (!HasLibrary || items.Count == 0)
+        {
+            return new DeleteInfo(0, 0, 0);
+        }
+
+        try
+        {
+            return await _library
+                .GetDeleteInfoAsync(items.Select(item => item.RelativePath).ToArray(), CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"读取删除信息失败：{ex.Message}");
+            return new DeleteInfo(items.Count, 0, items.Sum(item => item.Size));
+        }
+    }
+
+    public async Task<FileOperationResult> CreateFolderAsync(string name, string parentRelativePath)
+    {
+        if (!HasLibrary || IsBusy)
+        {
+            return FileOperationResult.Fail("当前无法创建文件夹。");
+        }
+
+        string? createdRelativePath = null;
+        string? error = null;
+        var token = BeginOperation("正在创建文件夹…", indeterminate: true);
+
+        try
+        {
+            var created = await _library
+                .CreateFolderAsync(parentRelativePath, name, token)
+                .ConfigureAwait(true);
+            createdRelativePath = created.RelativePath;
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消创建文件夹。";
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            _log.Error(ex, "创建文件夹失败");
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        if (createdRelativePath is null)
+        {
+            return FileOperationResult.Fail(error ?? "创建文件夹失败。");
+        }
+
+        await LoadCatalogAsync();
+        SelectGroup(createdRelativePath);
+        Message = $"已创建文件夹：{createdRelativePath.Replace('\\', '/')}";
+        return FileOperationResult.Ok(Message);
+    }
+
+    public async Task<FileOperationResult> RenameModAsync(ModItem item, string newName)
+    {
+        if (!HasLibrary || IsBusy || _catalog is null)
+        {
+            return FileOperationResult.Fail("当前无法重命名模组。");
+        }
+
+        var extension = Path.GetExtension(item.RelativePath);
+        var finalName = newName.Trim();
+        if (extension.Length > 0 &&
+            !finalName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+        {
+            finalName += extension;
+        }
+
+        if (string.IsNullOrWhiteSpace(Path.GetFileNameWithoutExtension(finalName)))
+        {
+            return FileOperationResult.Fail("文件名不能为空。");
+        }
+
+        string? newRelativePath = null;
+        string? error = null;
+        var token = BeginOperation("正在重命名模组…", indeterminate: true);
+
+        try
+        {
+            newRelativePath = await _library
+                .RenameAsync(item.RelativePath, finalName, token)
+                .ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消重命名。";
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            _log.Error(ex, "重命名模组失败");
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        if (newRelativePath is null)
+        {
+            return FileOperationResult.Fail(error ?? "重命名失败。");
+        }
+
+        var record = _catalog.State.Mods.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, item.Id, StringComparison.OrdinalIgnoreCase));
+
+        if (record is null)
+        {
+            return FileOperationResult.Fail("找不到该模组的状态记录。");
+        }
+
+        record.RelativePath = newRelativePath;
+        record.GroupPath = GetGroupPath(newRelativePath);
+        if (!record.IsWorkshop)
+        {
+            record.DisplayName = Path.GetFileName(newRelativePath);
+        }
+
+        var syncWarning = await SaveAndSyncMovedRecordsAsync([record], []).ConfigureAwait(true);
+        await LoadCatalogAsync();
+        Message = $"已重命名为：{Path.GetFileName(newRelativePath)}";
+        if (syncWarning is not null)
+        {
+            Message += $" {syncWarning}";
+        }
+
+        return FileOperationResult.Ok(Message);
+    }
+
+    public async Task<FileOperationResult> MoveModsAsync(
+        IReadOnlyList<ModItem> items,
+        string destinationRelativePath)
+    {
+        if (!HasLibrary || IsBusy || _catalog is null || items.Count == 0)
+        {
+            return FileOperationResult.Fail("当前无法移动模组。");
+        }
+
+        var movedRecords = new List<ModRecord>();
+        var errors = new List<string>();
+        var skipped = 0;
+        var token = BeginOperation("正在移动模组…", indeterminate: true);
+
+        try
+        {
+            foreach (var item in items)
+            {
+                token.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var result = await _library
+                        .MoveAsync([item.RelativePath], destinationRelativePath, token)
+                        .ConfigureAwait(true);
+
+                    if (result.Count == 0)
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    var newRelativePath = result[0];
+                    var record = _catalog.State.Mods.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Id, item.Id, StringComparison.OrdinalIgnoreCase));
+
+                    if (record is null)
+                    {
+                        errors.Add($"{item.DisplayName}：找不到状态记录");
+                        continue;
+                    }
+
+                    record.RelativePath = newRelativePath;
+                    record.GroupPath = GetGroupPath(newRelativePath);
+                    if (!record.IsWorkshop)
+                    {
+                        record.DisplayName = Path.GetFileName(newRelativePath);
+                    }
+
+                    movedRecords.Add(record);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{item.DisplayName}：{ex.Message}");
+                    _log.Error(ex, $"移动模组失败：{item.RelativePath}");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消移动。";
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        var syncWarning = movedRecords.Count > 0
+            ? await SaveAndSyncMovedRecordsAsync(movedRecords, []).ConfigureAwait(true)
+            : null;
+
+        if (movedRecords.Count > 0)
+        {
+            await LoadCatalogAsync();
+            SelectGroup(destinationRelativePath);
+            Message = $"已移动 {movedRecords.Count} 个模组到：{FormatGroup(destinationRelativePath)}";
+        }
+        else if (skipped > 0 && errors.Count == 0)
+        {
+            Message = "模组已经位于目标文件夹。";
+        }
+        else
+        {
+            Message = "没有移动任何模组。";
+        }
+
+        if (syncWarning is not null)
+        {
+            Message += $" {syncWarning}";
+        }
+
+        if (errors.Count > 0)
+        {
+            Message += $" 失败 {errors.Count} 个。";
+            return FileOperationResult.Fail(Message + Environment.NewLine + string.Join(Environment.NewLine, errors));
+        }
+
+        return FileOperationResult.Ok(Message);
+    }
+
+    public async Task<FileOperationResult> DeleteModsAsync(IReadOnlyList<ModItem> items)
+    {
+        if (!HasLibrary || IsBusy || _catalog is null || items.Count == 0)
+        {
+            return FileOperationResult.Fail("当前无法删除模组。");
+        }
+
+        var paths = items.Select(item => item.RelativePath).ToArray();
+        var ids = items.Select(item => item.Id).ToArray();
+        var token = BeginOperation("正在删除模组…", indeterminate: true);
+
+        try
+        {
+            await _library.DeleteAsync(paths, token).ConfigureAwait(true);
+
+            _catalog.State.Mods.RemoveAll(record =>
+                paths.Any(path =>
+                    string.Equals(path, record.RelativePath, StringComparison.OrdinalIgnoreCase)));
+
+            await _catalogService.SaveStateAsync(_catalog.State, token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消删除。";
+            return FileOperationResult.Fail(Message);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "删除模组失败");
+            Message = $"删除失败：{ex.Message}";
+            return FileOperationResult.Fail(Message);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        var syncWarning = await SyncDeploymentsAfterChangeAsync([], ids).ConfigureAwait(true);
+        await LoadCatalogAsync();
+        Message = $"已将 {items.Count} 个模组移动到回收站。";
+        if (syncWarning is not null)
+        {
+            Message += $" {syncWarning}";
+        }
+
+        return FileOperationResult.Ok(Message);
+    }
+
+    private async Task<string?> SaveAndSyncMovedRecordsAsync(
+        IReadOnlyList<ModRecord> records,
+        IReadOnlyList<string> removedIds)
+    {
+        if (_catalog is null || records.Count == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            await _catalogService.SaveStateAsync(_catalog.State).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "保存移动/重命名后的状态失败");
+            return "状态保存失败。";
+        }
+
+        return await SyncDeploymentsAfterChangeAsync(records, removedIds).ConfigureAwait(true);
+    }
+
+    private async Task<string?> SyncDeploymentsAfterChangeAsync(
+        IReadOnlyList<ModRecord> changedRecords,
+        IReadOnlyList<string> removedIds)
+    {
+        try
+        {
+            var enabled = changedRecords.Where(record => record.IsEnabled).ToArray();
+            if (enabled.Length > 0)
+            {
+                await _deployment.UpdateModSourcesAsync(enabled).ConfigureAwait(true);
+            }
+
+            var removeIds = changedRecords
+                .Where(record => !record.IsEnabled)
+                .Select(record => record.Id)
+                .Concat(removedIds)
+                .ToArray();
+
+            if (removeIds.Length > 0)
+            {
+                await _deployment.RemoveModsAsync(removeIds).ConfigureAwait(true);
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "同步部署链接失败");
+            return "部分部署链接未能同步，请手动推送。";
+        }
+    }
+
+    private void SelectGroup(string relativePath)
+    {
+        var option = GroupOptions.FirstOrDefault(candidate =>
+            string.Equals(candidate.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase));
+
+        if (option is not null)
+        {
+            SelectedGroup = option;
+        }
+    }
+
+    private static string GetGroupPath(string relativePath)
+    {
+        var directory = Path.GetDirectoryName(relativePath);
+        return string.IsNullOrEmpty(directory) ? string.Empty : directory;
+    }
+
+    private static string FormatGroup(string relativePath) =>
+        string.IsNullOrEmpty(relativePath) ? "未分类" : relativePath.Replace('\\', '/');
+
     public async Task<DeploymentPlan?> CreateDeploymentPlanAsync()
     {
         if (!HasLibrary)
@@ -906,6 +1284,10 @@ public sealed partial class MainViewModel : ViewModelBase
                 .LoadAsync(IsGameReady ? _gameAddonsPath : null, token)
                 .ConfigureAwait(true);
 
+            _libraryFolders = await _library
+                .EnumerateFoldersAsync(token)
+                .ConfigureAwait(true);
+
             foreach (var item in _allMods)
             {
                 item.PropertyChanged -= OnModPropertyChanged;
@@ -955,6 +1337,7 @@ public sealed partial class MainViewModel : ViewModelBase
 
         _allMods.Clear();
         _catalog = null;
+        _libraryFolders = [];
         Mods.Clear();
         SelectedMods.Clear();
 
@@ -1111,22 +1494,25 @@ public sealed partial class MainViewModel : ViewModelBase
             GroupOptions.Clear();
             GroupOptions.Add(new GroupOption("全部分组", null, _allMods.Count));
 
-            var groups = _allMods
+            var counts = _allMods
                 .GroupBy(item => item.GroupPath, StringComparer.OrdinalIgnoreCase)
-                .Select(group => new
-                {
-                    Path = group.Key,
-                    Count = group.Count(),
-                })
-                .OrderBy(group => group.Path.Length == 0 ? 0 : 1)
-                .ThenBy(group => group.Path, StringComparer.CurrentCultureIgnoreCase);
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
 
-            foreach (var group in groups)
+            var paths = new HashSet<string>(_libraryFolders, StringComparer.OrdinalIgnoreCase);
+            foreach (var path in counts.Keys)
             {
-                var displayName = string.IsNullOrEmpty(group.Path)
+                paths.Add(path);
+            }
+
+            foreach (var path in paths
+                         .OrderBy(path => path.Length == 0 ? 0 : 1)
+                         .ThenBy(path => path, StringComparer.CurrentCultureIgnoreCase))
+            {
+                var displayName = string.IsNullOrEmpty(path)
                     ? "未分类"
-                    : group.Path.Replace('\\', '/');
-                GroupOptions.Add(new GroupOption(displayName, group.Path, group.Count));
+                    : path.Replace('\\', '/');
+                var count = counts.GetValueOrDefault(path);
+                GroupOptions.Add(new GroupOption(displayName, path, count));
             }
 
             _selectedGroup = GroupOptions.FirstOrDefault(option =>

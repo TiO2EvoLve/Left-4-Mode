@@ -1,0 +1,42 @@
+<sukiUi:SukiWindow xmlns="https://github.com/avaloniaui"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:sukiUi="clr-namespace:SukiUI.Controls;assembly=SukiUI"
+                   x:Class="Left_4_Mod.Views.NameWindow"
+                   Width="520"
+                   Height="270"
+                   CanResize="False"
+                   WindowStartupLocation="CenterOwner"
+                   ShowInTaskbar="False"
+                   Icon="/Assets/avalonia-logo.ico"
+                   IsMenuVisible="False"
+                   ShowBottomBorder="True">
+
+    <Grid Margin="20,16,20,16" RowDefinitions="Auto,Auto,Auto,*,Auto">
+        <TextBlock x:Name="PromptText"
+                   Grid.Row="0"
+                   FontSize="14"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,12" />
+
+        <TextBox x:Name="NameBox"
+                 Grid.Row="1"
+                 MinHeight="36"
+                 KeyDown="OnNameKeyDown" />
+
+        <TextBlock x:Name="ErrorText"
+                   Grid.Row="2"
+                   FontSize="12"
+                   Foreground="#C42B1C"
+                   TextWrapping="Wrap"
+                   IsVisible="False"
+                   Margin="0,8,0,0" />
+
+        <StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button Content="取消" Click="OnCancelClick" />
+            <Button Content="确定" Click="OnOkClick" />
+        </StackPanel>
+    </Grid>
+</sukiUi:SukiWindow>

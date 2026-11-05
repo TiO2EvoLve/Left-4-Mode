@@ -27,6 +27,9 @@ public interface IModLibraryService
 
     Task<IReadOnlyList<FileSystemEntry>> ScanAsync(string relativeFolder, CancellationToken cancellationToken);
 
+    /// <summary>递归枚举模组库内的全部子文件夹（相对路径，不含根目录）。</summary>
+    Task<IReadOnlyList<string>> EnumerateFoldersAsync(CancellationToken cancellationToken = default);
+
     /// <summary>递归枚举模组库内的全部 VPK 模组。</summary>
     Task<IReadOnlyList<ModFileInfo>> EnumerateModFilesAsync(CancellationToken cancellationToken);
 

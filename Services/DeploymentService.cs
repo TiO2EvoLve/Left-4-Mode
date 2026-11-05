@@ -474,6 +474,164 @@ public sealed class DeploymentService : IDeploymentService
         return new DeploymentResult(added, updated, removed, skipped, failures, canceled);
     }
 
+    public async Task RemoveModsAsync(
+        IReadOnlyCollection<string> modIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (modIds.Count == 0)
+        {
+            return;
+        }
+
+        var ids = new HashSet<string>(modIds, StringComparer.OrdinalIgnoreCase);
+        var manifest = await LoadManifestAsync(cancellationToken).ConfigureAwait(false);
+        var changed = false;
+
+        foreach (var (addonsPath, entries) in manifest.Targets.ToArray())
+        {
+            for (var index = entries.Count - 1; index >= 0; index--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var entry = entries[index];
+                if (!ids.Contains(entry.ModId) || !EntryBelongsToCurrentLibrary(entry))
+                {
+                    continue;
+                }
+
+                var destination = GetSafeDestinationPath(addonsPath, entry.DestinationFileName);
+                if (destination is not null && Directory.Exists(destination))
+                {
+                    _log.Warn($"跳过删除部署项，因为目标是一个目录：{destination}");
+                    continue;
+                }
+
+                if (destination is not null && File.Exists(destination))
+                {
+                    try
+                    {
+                        File.Delete(destination);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Warn($"删除部署项失败：{destination}（{ex.Message}）");
+                        continue;
+                    }
+                }
+
+                entries.RemoveAt(index);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            await SaveManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+        }
+
+        _log.Info($"已清理 {ids.Count} 个模组的部署项。");
+    }
+
+    public async Task UpdateModSourcesAsync(
+        IReadOnlyCollection<ModRecord> records,
+        CancellationToken cancellationToken = default)
+    {
+        if (records.Count == 0 || _library.RootPath is null)
+        {
+            return;
+        }
+
+        var enabledRecords = records
+            .Where(record => record.IsEnabled)
+            .GroupBy(record => record.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        if (enabledRecords.Count == 0)
+        {
+            return;
+        }
+
+        var manifest = await LoadManifestAsync(cancellationToken).ConfigureAwait(false);
+        var changed = false;
+
+        foreach (var (addonsPath, entries) in manifest.Targets.ToArray())
+        {
+            foreach (var entry in entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!enabledRecords.TryGetValue(entry.ModId, out var record) ||
+                    !EntryBelongsToCurrentLibrary(entry))
+                {
+                    continue;
+                }
+
+                var destination = GetSafeDestinationPath(addonsPath, entry.DestinationFileName);
+                if (destination is null || Directory.Exists(destination))
+                {
+                    continue;
+                }
+
+                string sourceFullPath;
+                try
+                {
+                    sourceFullPath = _library.GetFullPath(record.RelativePath);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warn($"更新部署项时无法解析源路径：{record.RelativePath}（{ex.Message}）");
+                    continue;
+                }
+
+                if (!File.Exists(sourceFullPath))
+                {
+                    _log.Warn($"更新部署项时源文件不存在：{sourceFullPath}");
+                    continue;
+                }
+
+                try
+                {
+                    if (!IsSymbolicLinkValid(destination, sourceFullPath))
+                    {
+                        var temporaryPath = Path.Combine(
+                            addonsPath,
+                            $".l4m-deploy-{Guid.NewGuid():N}.tmp");
+
+                        try
+                        {
+                            CreateSymbolicLink(sourceFullPath, temporaryPath);
+                            File.Move(temporaryPath, destination, overwrite: true);
+                        }
+                        finally
+                        {
+                            TryDeleteFile(temporaryPath);
+                        }
+                    }
+
+                    var sourceInfo = new FileInfo(sourceFullPath);
+                    entry.SourceRelativePath = record.RelativePath;
+                    entry.SourceLibraryPath = _library.RootPath;
+                    entry.SourceSize = sourceInfo.Length;
+                    entry.SourceLastWriteUtc = sourceInfo.LastWriteTimeUtc;
+                    entry.Mode = SymbolicLinkMode;
+                    entry.DeployedAtUtc = DateTime.UtcNow;
+                    changed = true;
+                }
+                catch (Exception ex)
+                {
+                    _log.Warn($"更新部署项符号链接失败：{entry.DestinationFileName}（{ex.Message}）");
+                }
+            }
+        }
+
+        if (changed)
+        {
+            await SaveManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+        }
+
+        _log.Info($"已更新 {enabledRecords.Count} 个模组的部署源路径。");
+    }
+
     private const string SymbolicLinkMode = "SymbolicLink";
 
     private void CreateSymbolicLink(string sourcePath, string temporaryPath)
