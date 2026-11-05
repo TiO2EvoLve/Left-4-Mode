@@ -30,6 +30,7 @@ public partial class SettingsWindow : SukiWindow
         LibraryBox.Text = viewModel.LibraryPath;
         GameBox.Text = viewModel.GamePath;
         GameHint.Text = viewModel.GameStatusText;
+        AutoUpdateToggle.IsChecked = viewModel.AutoUpdateWorkshop;
     }
 
     private async void OnBrowseLibraryClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -90,7 +91,8 @@ public partial class SettingsWindow : SukiWindow
 
         var (success, error) = await _viewModel.ApplySettingsAsync(
             LibraryBox.Text ?? string.Empty,
-            GameBox.Text ?? string.Empty);
+            GameBox.Text ?? string.Empty,
+            AutoUpdateToggle.IsChecked == true);
 
         if (!success)
         {

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
@@ -37,13 +39,19 @@ public sealed class ModThumbnailService : IModThumbnailService
         "addonimage",
         "addonimage_small",
         "addonimage_large",
+        "addonimage_thumb",
         "image",
         "thumbnail",
+        "thumbnailimage",
         "preview",
+        "previewimage",
         "icon",
+        "banner",
+        "header",
     ];
 
     private readonly IModLibraryService _library;
+    private readonly IWorkshopService _workshop;
     private readonly HttpClient _httpClient;
     private readonly ILogService _log;
     private readonly Lazy<Bitmap?> _folderImage;
@@ -52,10 +60,12 @@ public sealed class ModThumbnailService : IModThumbnailService
 
     public ModThumbnailService(
         IModLibraryService library,
+        IWorkshopService workshop,
         HttpClient httpClient,
         ILogService log)
     {
         _library = library;
+        _workshop = workshop;
         _httpClient = httpClient;
         _log = log;
         _folderImage = new Lazy<Bitmap?>(() => LoadAsset("File.png"));
@@ -87,11 +97,6 @@ public sealed class ModThumbnailService : IModThumbnailService
         string vpkFullPath,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(record.Id))
-        {
-            return null;
-        }
-
         var cached = FindCachedPhoto(record);
         if (cached is not null)
         {
@@ -124,9 +129,36 @@ public sealed class ModThumbnailService : IModThumbnailService
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!string.IsNullOrWhiteSpace(record.WorkshopPreviewUrl))
+        var previewUrl = record.WorkshopPreviewUrl;
+        if (string.IsNullOrWhiteSpace(previewUrl) &&
+            record.WorkshopId is { } workshopId &&
+            workshopId != 0)
         {
-            var downloaded = await TryDownloadPreviewAsync(record, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var details = await _workshop
+                    .GetDetailsAsync(workshopId, cancellationToken)
+                    .ConfigureAwait(false);
+                previewUrl = details.PreviewUrl;
+                if (!string.IsNullOrWhiteSpace(previewUrl))
+                {
+                    record.WorkshopPreviewUrl = previewUrl;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Warn($"获取创意工坊预览图地址失败：{workshopId}（{ex.Message}）");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(previewUrl))
+        {
+            var downloaded = await TryDownloadPreviewAsync(record, previewUrl, cancellationToken)
+                .ConfigureAwait(false);
             if (downloaded is not null)
             {
                 return downloaded;
@@ -138,12 +170,13 @@ public sealed class ModThumbnailService : IModThumbnailService
 
     private async Task<Bitmap?> TryDownloadPreviewAsync(
         ModRecord record,
+        string previewUrl,
         CancellationToken cancellationToken)
     {
         try
         {
             using var response = await _httpClient
-                .GetAsync(record.WorkshopPreviewUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .GetAsync(previewUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
@@ -164,7 +197,7 @@ public sealed class ModThumbnailService : IModThumbnailService
                 return null;
             }
 
-            var extension = GetExtensionFromUrl(record.WorkshopPreviewUrl!);
+            var extension = GetExtensionFromUrl(previewUrl);
             var saved = SaveToPhotoFolder(record, bytes, extension);
             var bitmap = saved is null ? TryLoadBitmap(bytes) : TryLoadBitmap(saved);
             if (bitmap is null && saved is not null)
@@ -209,7 +242,10 @@ public sealed class ModThumbnailService : IModThumbnailService
                 .SelectMany(list => list)
                 .ToArray();
 
-            var entry = FindEntryFromAddonInfo(package, entries) ?? FindImageEntry(entries);
+            var configuredEntry = FindEntryFromAddonInfo(package, entries);
+            var entry = configuredEntry is not null && IsImageEntry(configuredEntry)
+                ? configuredEntry
+                : FindImageEntry(entries);
             if (entry is null ||
                 entry.TotalLength == 0 ||
                 entry.TotalLength > MaxImageBytes)
@@ -258,8 +294,12 @@ public sealed class ModThumbnailService : IModThumbnailService
                 return null;
             }
 
-            var candidate = imagePath.Trim().Replace('/', '\\');
-            var direct = TryFindEntry(package, candidate);
+            var candidate = imagePath
+                .Trim()
+                .Trim('"', '\'')
+                .TrimStart('/', '\\')
+                .Replace('/', '\\');
+            var direct = TryFindEntry(package, candidate, entries);
             if (direct is not null)
             {
                 return direct;
@@ -269,7 +309,7 @@ public sealed class ModThumbnailService : IModThumbnailService
             {
                 foreach (var extension in ImageExtensions)
                 {
-                    direct = TryFindEntry(package, candidate + extension);
+                    direct = TryFindEntry(package, candidate + extension, entries);
                     if (direct is not null)
                     {
                         return direct;
@@ -285,24 +325,39 @@ public sealed class ModThumbnailService : IModThumbnailService
         return null;
     }
 
-    private static PackageEntry? TryFindEntry(Package package, string path)
+    private static PackageEntry? TryFindEntry(
+        Package package,
+        string path,
+        IReadOnlyList<PackageEntry> entries)
     {
         try
         {
-            return package.FindEntry(path);
+            var entry = package.FindEntry(path);
+            if (entry is not null)
+            {
+                return entry;
+            }
         }
         catch (Exception)
         {
-            return null;
+            // 继续用完整路径扫描做兼容。
         }
+
+        var normalized = path.Replace('\\', '/').Trim('/');
+        return entries.FirstOrDefault(entry =>
+        {
+            var fullPath = $"{entry.DirectoryName}/{entry.FileName}.{entry.TypeName}"
+                .Replace('\\', '/')
+                .Trim()
+                .Trim('/');
+            return string.Equals(fullPath, normalized, StringComparison.OrdinalIgnoreCase);
+        });
     }
 
     private static PackageEntry? FindImageEntry(IReadOnlyList<PackageEntry> entries)
     {
         var imageEntries = entries
-            .Where(entry => ImageExtensions.Contains(
-                NormalizeExtension(entry.TypeName),
-                StringComparer.OrdinalIgnoreCase))
+            .Where(IsImageEntry)
             .ToArray();
 
         return imageEntries.FirstOrDefault(entry =>
@@ -315,8 +370,15 @@ public sealed class ModThumbnailService : IModThumbnailService
                ?? imageEntries.FirstOrDefault(entry =>
                    entry.FileName.Contains("thumbnail", StringComparison.OrdinalIgnoreCase) ||
                    entry.FileName.Contains("preview", StringComparison.OrdinalIgnoreCase) ||
-                   entry.FileName.Contains("thumb", StringComparison.OrdinalIgnoreCase));
+                   entry.FileName.Contains("thumb", StringComparison.OrdinalIgnoreCase))
+               ?? imageEntries.FirstOrDefault(entry =>
+                   string.IsNullOrWhiteSpace(entry.DirectoryName));
     }
+
+    private static bool IsImageEntry(PackageEntry entry) =>
+        ImageExtensions.Contains(
+            NormalizeExtension(entry.TypeName),
+            StringComparer.OrdinalIgnoreCase);
 
     private static string? FindValue(KVObject node, IReadOnlyList<string> keys)
     {
@@ -352,19 +414,34 @@ public sealed class ModThumbnailService : IModThumbnailService
             return null;
         }
 
-        var baseName = GetSafeFileStem(record);
-        foreach (var extension in ImageExtensions)
+        try
         {
-            var path = Path.Combine(directory, baseName + extension);
-            if (File.Exists(path))
+            foreach (var stem in GetCacheStems(record))
             {
-                return path;
+                foreach (var extension in ImageExtensions)
+                {
+                    var path = Path.Combine(directory, stem + extension);
+                    if (File.Exists(path))
+                    {
+                        return path;
+                    }
+                }
+
+                var fallback = Directory
+                    .EnumerateFiles(directory, stem + ".*", SearchOption.TopDirectoryOnly)
+                    .FirstOrDefault();
+                if (fallback is not null)
+                {
+                    return fallback;
+                }
             }
         }
+        catch (Exception ex)
+        {
+            _log.Warn($"读取缩略图缓存失败：{ex.Message}");
+        }
 
-        return Directory
-            .EnumerateFiles(directory, baseName + ".*", SearchOption.TopDirectoryOnly)
-            .FirstOrDefault();
+        return null;
     }
 
     private string? SaveToPhotoFolder(ModRecord record, byte[] bytes, string extension)
@@ -378,7 +455,7 @@ public sealed class ModThumbnailService : IModThumbnailService
         try
         {
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, GetSafeFileStem(record) + NormalizeExtension(extension));
+            var path = Path.Combine(directory, GetStableFileStem(record) + NormalizeExtension(extension));
             var temporary = path + ".tmp";
             File.WriteAllBytes(temporary, bytes);
             File.Move(temporary, path, overwrite: true);
@@ -401,10 +478,62 @@ public sealed class ModThumbnailService : IModThumbnailService
         return Path.Combine(_library.RootPath, PhotoFolderName);
     }
 
-    private static string GetSafeFileStem(ModRecord record)
+    /// <summary>
+    /// 优先读取旧版以记录 Id 命名的缓存，再使用与状态文件无关的稳定键。
+    /// 这样即使状态文件丢失、记录 Id 重新生成，也能复用同一张缩略图。
+    /// </summary>
+    private static IEnumerable<string> GetCacheStems(ModRecord record)
     {
+        if (!string.IsNullOrWhiteSpace(record.Id))
+        {
+            yield return GetSafeFileStem(record.Id);
+        }
+
+        if (record.WorkshopId is { } workshopId && workshopId != 0)
+        {
+            yield return "workshop_" + workshopId;
+        }
+
+        var relativePath = NormalizeCachePath(record.RelativePath);
+        if (relativePath.Length > 0)
+        {
+            yield return "path_" + HashForFileName(relativePath);
+        }
+    }
+
+    private static string GetStableFileStem(ModRecord record)
+    {
+        if (record.WorkshopId is { } workshopId && workshopId != 0)
+        {
+            return "workshop_" + workshopId;
+        }
+
+        var relativePath = NormalizeCachePath(record.RelativePath);
+        if (relativePath.Length > 0)
+        {
+            return "path_" + HashForFileName(relativePath);
+        }
+
+        return GetSafeFileStem(record.Id);
+    }
+
+    private static string NormalizeCachePath(string? relativePath) =>
+        (relativePath ?? string.Empty)
+        .Replace('\\', '/')
+        .Trim('/')
+        .ToLowerInvariant();
+
+    private static string HashForFileName(string value)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash)[..24].ToLowerInvariant();
+    }
+
+    private static string GetSafeFileStem(string? value)
+    {
+        var source = string.IsNullOrWhiteSpace(value) ? "mod" : value;
         var invalid = Path.GetInvalidFileNameChars();
-        var stem = new string(record.Id
+        var stem = new string(source
             .Select(character => invalid.Contains(character) ? '_' : character)
             .ToArray());
 

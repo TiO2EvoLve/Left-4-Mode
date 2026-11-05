@@ -374,3 +374,7 @@ FodyWeavers.xsd
 
 # App persistent data (portable, stored beside the project/executable)
 L4D2ModManagerData/
+/settings.json
+/deployments.json
+/state/
+/logs/

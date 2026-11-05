@@ -36,6 +36,8 @@ public sealed partial class MainViewModel : ViewModelBase
 
     private CancellationTokenSource? _operationCts;
     private CancellationTokenSource? _thumbnailCts;
+    private CancellationTokenSource? _autoUpdateCts;
+    private bool _autoUpdateRunning;
     private ModCatalog? _catalog;
     private string _searchText = string.Empty;
     private string _sortField = "Name";
@@ -64,6 +66,7 @@ public sealed partial class MainViewModel : ViewModelBase
     [Reactive] private string _gamePath = string.Empty;
     [Reactive] private string _gameStatusText = "未设置游戏目录。";
     [Reactive] private bool _isGameReady;
+    [Reactive] private bool _autoUpdateWorkshop = true;
 
     public MainViewModel(
         IModLibraryService library,
@@ -84,6 +87,7 @@ public sealed partial class MainViewModel : ViewModelBase
         _settings = settings;
         _log = log;
         _appSettings = _settings.Load();
+        _autoUpdateWorkshop = _appSettings.AutoUpdateWorkshop;
 
         EnabledFilterOptions =
         [
@@ -362,6 +366,8 @@ public sealed partial class MainViewModel : ViewModelBase
             return;
         }
 
+        CancelAutomaticWorkshopUpdate();
+
         try
         {
             _library.SetLibrary(path);
@@ -385,7 +391,8 @@ public sealed partial class MainViewModel : ViewModelBase
 
     public async Task<(bool Success, string Error)> ApplySettingsAsync(
         string libraryPath,
-        string gamePath)
+        string gamePath,
+        bool autoUpdateWorkshop = true)
     {
         if (IsBusy)
         {
@@ -441,6 +448,13 @@ public sealed partial class MainViewModel : ViewModelBase
         _appSettings.LibraryPath = _library.RootPath;
         _appSettings.GamePath = gameInfo?.GameRoot;
         _appSettings.DeploymentStrategy = "SymbolicLink";
+        AutoUpdateWorkshop = autoUpdateWorkshop;
+        _appSettings.AutoUpdateWorkshop = autoUpdateWorkshop;
+
+        if (libraryChanged || !autoUpdateWorkshop)
+        {
+            CancelAutomaticWorkshopUpdate();
+        }
 
         if (!await SaveSettingsAsync())
         {
@@ -861,6 +875,11 @@ public sealed partial class MainViewModel : ViewModelBase
             return null;
         }
 
+        if (!automatic && _autoUpdateRunning)
+        {
+            _autoUpdateCts?.Cancel();
+        }
+
         var workshopCount = _catalog.State.Mods.Count(record => record.WorkshopId.HasValue);
         if (workshopCount == 0)
         {
@@ -947,6 +966,89 @@ public sealed partial class MainViewModel : ViewModelBase
 
         return result;
     }
+
+    /// <summary>
+    /// 启动后/定时器的后台更新。不占用 IsBusy，不显示进度遮罩，用户仍可浏览和操作。
+    /// </summary>
+    public async Task RunAutomaticWorkshopUpdateAsync()
+    {
+        if (!AutoUpdateWorkshop ||
+            !HasLibrary ||
+            IsBusy ||
+            _catalog is null ||
+            _autoUpdateRunning)
+        {
+            return;
+        }
+
+        var workshopCount = _catalog.State.Mods.Count(record => record.WorkshopId.HasValue);
+        if (workshopCount == 0)
+        {
+            return;
+        }
+
+        _autoUpdateRunning = true;
+        var cts = new CancellationTokenSource();
+        _autoUpdateCts = cts;
+
+        try
+        {
+            var result = await _workshop
+                .CheckForUpdatesAsync(_catalog, progress: null, cts.Token)
+                .ConfigureAwait(true);
+
+            if (result is null)
+            {
+                return;
+            }
+
+            if (result.CheckedCount > 0)
+            {
+                if (IsBusy)
+                {
+                    Message = "后台创意工坊检查已完成；当前操作结束后可刷新列表查看结果。";
+                    return;
+                }
+
+                await ReloadCatalogSilentlyAsync(cts.Token).ConfigureAwait(true);
+            }
+
+            if (result.Updated.Count > 0)
+            {
+                Message = $"后台创意工坊更新完成：已更新 {result.Updated.Count} 个模组。";
+            }
+            else if (result.Failures.Count > 0)
+            {
+                Message = $"后台创意工坊检查完成，失败 {result.Failures.Count} 个。";
+            }
+
+            foreach (var failure in result.Failures)
+            {
+                _log.Warn($"后台工坊更新失败：{failure.PublishedFileId} {failure.Title}：{failure.Message}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 关闭窗口、切换模组库或手动检查时取消。
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "后台检查创意工坊更新失败");
+            Message = $"后台检查创意工坊更新失败：{ex.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_autoUpdateCts, cts))
+            {
+                _autoUpdateCts = null;
+            }
+
+            _autoUpdateRunning = false;
+            cts.Dispose();
+        }
+    }
+
+    public void CancelAutomaticWorkshopUpdate() => _autoUpdateCts?.Cancel();
 
     public IReadOnlyList<FolderChoice> GetFolderChoices()
     {
@@ -1533,6 +1635,7 @@ public sealed partial class MainViewModel : ViewModelBase
         _appSettings.LibraryPath = _library.RootPath;
         _appSettings.GamePath = IsGameReady ? GamePath : null;
         _appSettings.DeploymentStrategy = "SymbolicLink";
+        _appSettings.AutoUpdateWorkshop = AutoUpdateWorkshop;
 
         try
         {
@@ -1545,6 +1648,42 @@ public sealed partial class MainViewModel : ViewModelBase
             Message = $"保存设置失败：{ex.Message}";
             return false;
         }
+    }
+
+    private async Task ReloadCatalogSilentlyAsync(CancellationToken cancellationToken)
+    {
+        if (!HasLibrary)
+        {
+            return;
+        }
+
+        var catalog = await _catalogService
+            .LoadAsync(IsGameReady ? _gameAddonsPath : null, cancellationToken)
+            .ConfigureAwait(true);
+
+        _libraryFolders = await _library
+            .EnumerateFoldersAsync(cancellationToken)
+            .ConfigureAwait(true);
+
+        foreach (var item in _allMods)
+        {
+            item.PropertyChanged -= OnModPropertyChanged;
+        }
+
+        _allMods.Clear();
+        _catalog = catalog;
+        _allMods.AddRange(catalog.Mods);
+
+        foreach (var item in _allMods)
+        {
+            item.PropertyChanged += OnModPropertyChanged;
+        }
+
+        BuildGroupOptions();
+        EnsureCurrentFolderValid();
+        ApplyFilter();
+        NotifyNavigationChanged();
+        UpdateCounts();
     }
 
     private async Task<bool> LoadCatalogAsync()

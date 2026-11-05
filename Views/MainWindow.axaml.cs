@@ -179,7 +179,7 @@ public partial class MainWindow : SukiWindow
 
         if (_viewModel.HasLibrary)
         {
-            await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+            StartAutomaticWorkshopUpdate();
             ModList.Focus();
             return;
         }
@@ -193,6 +193,7 @@ public partial class MainWindow : SukiWindow
     private void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
         _workshopTimer?.Stop();
+        _viewModel?.CancelAutomaticWorkshopUpdate();
 
         try
         {
@@ -211,14 +212,36 @@ public partial class MainWindow : SukiWindow
         {
             Interval = TimeSpan.FromMinutes(30),
         };
-        _workshopTimer.Tick += async (_, _) =>
+        _workshopTimer.Tick += (_, _) =>
         {
             if (_viewModel is { HasLibrary: true, IsBusy: false } && !_dialogOpen)
             {
-                await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+                StartAutomaticWorkshopUpdate();
             }
         };
         _workshopTimer.Start();
+    }
+
+    private void StartAutomaticWorkshopUpdate()
+    {
+        if (_viewModel is null || !_viewModel.AutoUpdateWorkshop)
+        {
+            return;
+        }
+
+        _ = RunAutomaticWorkshopUpdateAsync();
+    }
+
+    private async Task RunAutomaticWorkshopUpdateAsync()
+    {
+        try
+        {
+            await _viewModel!.RunAutomaticWorkshopUpdateAsync();
+        }
+        catch (Exception ex)
+        {
+            _viewModel?.ReportViewWarning($"后台检查创意工坊更新失败：{ex.Message}", ex);
+        }
     }
 
     // =====================================================================
@@ -241,7 +264,7 @@ public partial class MainWindow : SukiWindow
         await _viewModel.SetLibraryAsync(folder);
         if (_viewModel.HasLibrary)
         {
-            await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+            StartAutomaticWorkshopUpdate();
             ModList.Focus();
         }
     }
@@ -297,7 +320,7 @@ public partial class MainWindow : SukiWindow
         if (await OpenSettingsAsync() &&
             _viewModel is { HasLibrary: true })
         {
-            await _viewModel.CheckWorkshopUpdatesAsync(automatic: true);
+            StartAutomaticWorkshopUpdate();
         }
     }
 

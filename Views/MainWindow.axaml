@@ -54,6 +54,9 @@
     </sukiUi:SukiWindow.Resources>
 
     <sukiUi:SukiWindow.Styles>
+        <Style Selector="ListBoxItem /template/ PathIcon#CheckSelected">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
         <Style Selector="Button.flat">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />

@@ -20,4 +20,7 @@ public sealed class AppSettings
 
     /// <summary>预留：部署策略。</summary>
     public string? DeploymentStrategy { get; set; }
+
+    /// <summary>启动后是否在后台自动检查并更新创意工坊模组。</summary>
+    public bool AutoUpdateWorkshop { get; set; } = true;
 }

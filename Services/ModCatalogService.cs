@@ -74,6 +74,14 @@ public sealed class ModCatalogService : IModCatalogService
                     RelativePath = file.RelativePath,
                     DisplayName = Path.GetFileName(file.RelativePath),
                 };
+                record.WorkshopId = TryGetWorkshopId(file.RelativePath);
+                changed = true;
+            }
+
+            if (record.WorkshopId is null &&
+                TryGetWorkshopId(file.RelativePath) is { } inferredWorkshopId)
+            {
+                record.WorkshopId = inferredWorkshopId;
                 changed = true;
             }
 
@@ -131,6 +139,20 @@ public sealed class ModCatalogService : IModCatalogService
         _log.Info($"模组目录已加载：{items.Count} 个模组，{groups.Length} 个分组");
 
         return new ModCatalog(state, items, groups, manifest);
+    }
+
+    private static ulong? TryGetWorkshopId(string relativePath)
+    {
+        var directory = Path.GetDirectoryName(relativePath);
+        if (!string.Equals(directory, "Workshop", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var fileName = Path.GetFileNameWithoutExtension(relativePath);
+        return ulong.TryParse(fileName, out var workshopId) && workshopId > 0
+            ? workshopId
+            : null;
     }
 
     public Task SaveStateAsync(ModState state, CancellationToken cancellationToken = default) =>
