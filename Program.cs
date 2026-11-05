@@ -48,6 +48,7 @@ internal static class Program
                 .CreateLogger();
 
             Log.Information("应用启动，版本 {Version}", typeof(Program).Assembly.GetName().Version);
+            Log.Information("应用数据目录：{DataDirectory}", AppPaths.AppDataDirectory);
         }
         catch (Exception ex)
         {

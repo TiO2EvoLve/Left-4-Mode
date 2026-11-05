@@ -30,6 +30,7 @@ public static class ServiceRegistration
         container.Register<IGamePathService, GamePathService>(Reuse.Singleton);
         container.Register<IDeploymentService, DeploymentService>(Reuse.Singleton);
         container.Register<IModCatalogService, ModCatalogService>(Reuse.Singleton);
+        container.Register<IModThumbnailService, ModThumbnailService>(Reuse.Singleton);
         container.Register<IWorkshopDownloader, DownloaderWorkshopDownloader>(Reuse.Singleton);
         container.Register<IWorkshopService, WorkshopService>(Reuse.Singleton);
         container.Register<MainViewModel>(Reuse.Singleton);

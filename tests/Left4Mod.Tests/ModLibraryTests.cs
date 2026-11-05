@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Media.Imaging;
 using Left_4_Mod.Models;
 using Left_4_Mod.Services;
 using Left_4_Mod.ViewModels;
@@ -200,6 +201,7 @@ public sealed class ModLibraryTests
             deployment,
             new GamePathService(log),
             new NoopWorkshopService(),
+            new StubThumbnailService(),
             settings,
             log);
 
@@ -207,9 +209,13 @@ public sealed class ModLibraryTests
 
         Assert.True(viewModel.HasLibrary);
         Assert.Equal(2, viewModel.ModCount);
-        Assert.Equal(2, viewModel.Mods.Count);
-        Assert.Contains(viewModel.GroupOptions, option => option.RelativePath == "weapons");
-        Assert.Contains(viewModel.GroupOptions, option => option.RelativePath == "characters");
+        Assert.Empty(viewModel.Mods);
+        Assert.Contains(viewModel.Rows, row => row.IsFolder && row.RelativePath == "weapons");
+        Assert.Contains(viewModel.Rows, row => row.IsFolder && row.RelativePath == "characters");
+
+        viewModel.NavigateTo("weapons");
+        Assert.Equal("weapons", viewModel.CurrentFolderPath);
+        Assert.Equal("weapons", viewModel.Breadcrumbs.Last().RelativePath);
 
         var ak47 = viewModel.Mods.Single(item => item.FileName == "ak47.vpk");
         viewModel.SetSelection([ak47]);
@@ -222,18 +228,15 @@ public sealed class ModLibraryTests
         var persisted = await stateStore.LoadAsync(libraryDirectory.Path);
         Assert.True(persisted.Mods.Single(record => record.RelativePath == "weapons\\ak47.vpk").IsEnabled);
 
+        viewModel.NavigateTo("characters");
         viewModel.SearchText = "zoey";
         Assert.Single(viewModel.Mods);
         Assert.Equal("characters", viewModel.Mods[0].GroupPath);
 
         viewModel.ClearFilters();
-        Assert.Equal(2, viewModel.Mods.Count);
-
-        viewModel.SelectedGroup = viewModel.GroupOptions.Single(option => option.RelativePath == "weapons");
         Assert.Single(viewModel.Mods);
-        Assert.Equal("weapons", viewModel.Mods[0].GroupPath);
 
-        viewModel.ClearFilters();
+        viewModel.NavigateTo("weapons");
         viewModel.SelectedEnabledFilter = viewModel.EnabledFilterOptions
             .Single(option => option.Value == ModEnabledFilter.Enabled);
         Assert.Single(viewModel.Mods);
@@ -249,6 +252,118 @@ public sealed class ModLibraryTests
         Assert.True(settingsApplied, settingsError);
         Assert.True(viewModel.IsGameReady);
         Assert.Equal(gameRoot, settings.Load().GamePath);
+    }
+
+    [Fact]
+    public async Task ViewModel_settings_survive_reload()
+    {
+        using var libraryDirectory = new TempDirectory();
+        using var appDataDirectory = new TempDirectory();
+        var gameRoot = appDataDirectory.Combine("game");
+        Directory.CreateDirectory(libraryDirectory.Combine("weapons"));
+        Directory.CreateDirectory(Path.Combine(gameRoot, "left4dead2", "addons"));
+        File.WriteAllText(libraryDirectory.Combine("weapons\\ak47.vpk"), "vpk");
+
+        var log = new RecordingLog();
+        var library = CreateLibrary(libraryDirectory.Path, log);
+        var settingsPath = appDataDirectory.Combine("settings.json");
+        var stateDirectory = appDataDirectory.Combine("state");
+        var manifestPath = appDataDirectory.Combine("deployments.json");
+
+        var settings = new JsonSettingsService(log) { SettingsFilePath = settingsPath };
+        var stateStore = new JsonModStateStore(log) { StateDirectory = stateDirectory };
+        var deployment = new DeploymentService(library, log) { ManifestFilePath = manifestPath };
+        var catalogService = new ModCatalogService(library, stateStore, deployment, log);
+
+        var first = new MainViewModel(
+            library,
+            catalogService,
+            deployment,
+            new GamePathService(log),
+            new NoopWorkshopService(),
+            new StubThumbnailService(),
+            settings,
+            log);
+
+        await first.SetLibraryAsync(libraryDirectory.Path);
+        var (applied, error) = await first.ApplySettingsAsync(libraryDirectory.Path, gameRoot);
+        Assert.True(applied, error);
+
+        var second = new MainViewModel(
+            library,
+            catalogService,
+            deployment,
+            new GamePathService(log),
+            new NoopWorkshopService(),
+            new StubThumbnailService(),
+            new JsonSettingsService(log) { SettingsFilePath = settingsPath },
+            log);
+
+        Assert.True(second.HasLibrary);
+        Assert.Equal(Path.GetFullPath(libraryDirectory.Path), Path.GetFullPath(second.LibraryPath));
+        Assert.True(second.IsGameReady);
+        Assert.Equal(gameRoot, second.GamePath);
+    }
+
+    [Fact]
+    public async Task Folder_navigation_and_recursive_delete_update_state()
+    {
+        using var libraryDirectory = new TempDirectory();
+        using var appDataDirectory = new TempDirectory();
+        Directory.CreateDirectory(libraryDirectory.Combine("分类\\子分类"));
+        File.WriteAllText(libraryDirectory.Combine("分类\\子分类\\a.vpk"), "vpk");
+
+        var log = new RecordingLog();
+        var library = CreateLibrary(libraryDirectory.Path, log);
+        var settings = new JsonSettingsService(log)
+        {
+            SettingsFilePath = appDataDirectory.Combine("settings.json"),
+        };
+        var stateStore = new JsonModStateStore(log)
+        {
+            StateDirectory = appDataDirectory.Combine("state"),
+        };
+        var deployment = new DeploymentService(library, log)
+        {
+            ManifestFilePath = appDataDirectory.Combine("deployments.json"),
+        };
+        var catalogService = new ModCatalogService(library, stateStore, deployment, log);
+        var viewModel = new MainViewModel(
+            library,
+            catalogService,
+            deployment,
+            new GamePathService(log),
+            new NoopWorkshopService(),
+            new StubThumbnailService(),
+            settings,
+            log);
+
+        await viewModel.SetLibraryAsync(libraryDirectory.Path);
+
+        Assert.Contains(viewModel.Rows, row =>
+            row.IsFolder && string.Equals(row.RelativePath, "分类", StringComparison.OrdinalIgnoreCase));
+
+        viewModel.NavigateTo("分类");
+        Assert.Contains(viewModel.Rows, row =>
+            row.IsFolder && string.Equals(row.RelativePath, "分类\\子分类", StringComparison.OrdinalIgnoreCase));
+
+        viewModel.NavigateTo("分类\\子分类");
+        Assert.Contains(viewModel.Rows, row => row.Mod?.FileName == "a.vpk");
+        Assert.Equal(3, viewModel.Breadcrumbs.Count);
+
+        viewModel.NavigateBack();
+        Assert.Equal("分类", viewModel.CurrentFolderPath);
+
+        viewModel.NavigateTo(string.Empty);
+        var folderRow = viewModel.Rows.Single(row =>
+            row.IsFolder && string.Equals(row.RelativePath, "分类", StringComparison.OrdinalIgnoreCase));
+
+        var deleteResult = await viewModel.DeleteFolderAsync(folderRow);
+        Assert.True(deleteResult.Success, deleteResult.Message);
+        Assert.False(Directory.Exists(libraryDirectory.Combine("分类")));
+
+        var state = await stateStore.LoadAsync(libraryDirectory.Path);
+        Assert.Empty(state.Mods);
     }
 
     [Fact]
@@ -689,8 +804,20 @@ public sealed class ModLibraryTests
             Task.FromResult(new WorkshopUpdateResult(0, [], [], false));
     }
 
-    private sealed class FakeWorkshopDownloader : IWorkshopDownloader
+    private sealed class StubThumbnailService : IModThumbnailService
     {
+        public Bitmap? FolderImage => null;
+
+        public Bitmap? PlaceholderImage => null;
+
+        public Task<Bitmap?> LoadAsync(
+            ModRecord record,
+            string vpkFullPath,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<Bitmap?>(null);
+    }
+
+    private sealed class FakeWorkshopDownloader : IWorkshopDownloader    {
         private readonly string _content;
 
         public FakeWorkshopDownloader(string content)

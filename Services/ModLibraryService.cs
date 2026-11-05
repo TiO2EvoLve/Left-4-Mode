@@ -244,7 +244,8 @@ public sealed class ModLibraryService : IModLibraryService
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var relativePath = Path.GetRelativePath(root, directory);
-                    if (relativePath.StartsWith(".l4m-", StringComparison.OrdinalIgnoreCase))
+                    if (relativePath.StartsWith(".l4m-", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(relativePath, "photo", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }

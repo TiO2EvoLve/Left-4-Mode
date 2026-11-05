@@ -371,3 +371,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# App persistent data (portable, stored beside the project/executable)
+L4D2ModManagerData/

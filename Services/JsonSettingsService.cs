@@ -1,20 +1,23 @@
+
 using System;
 using System.IO;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Left_4_Mod.Infrastructure;
 using Left_4_Mod.Models;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 
 namespace Left_4_Mod.Services;
 
 public sealed class JsonSettingsService : ISettingsService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerSettings JsonSettings = new()
     {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Formatting = Formatting.Indented,
+        NullValueHandling = NullValueHandling.Ignore,
+        ObjectCreationHandling = ObjectCreationHandling.Replace,
+        ContractResolver = new CamelCasePropertyNamesContractResolver(),
     };
 
     private readonly ILogService _log;
@@ -37,7 +40,7 @@ public sealed class JsonSettingsService : ISettingsService
             }
 
             var json = File.ReadAllText(SettingsFilePath);
-            var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
+            var settings = JsonConvert.DeserializeObject<AppSettings>(json, JsonSettings);
             if (settings is null)
             {
                 _log.Warn($"设置文件内容为空：{SettingsFilePath}");
@@ -80,7 +83,7 @@ public sealed class JsonSettingsService : ISettingsService
             }
 
             settings.Version = AppSettings.CurrentVersion;
-            var json = JsonSerializer.Serialize(settings, JsonOptions);
+            var json = JsonConvert.SerializeObject(settings, JsonSettings);
 
             // 先写临时文件再替换，避免退出或异常时产生半写入文件。
             await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);

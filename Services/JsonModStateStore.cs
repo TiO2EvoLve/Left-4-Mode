@@ -2,11 +2,12 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Left_4_Mod.Infrastructure;
 using Left_4_Mod.Models;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 
 namespace Left_4_Mod.Services;
 
@@ -15,11 +16,12 @@ namespace Left_4_Mod.Services;
 /// </summary>
 public sealed class JsonModStateStore : IModStateStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerSettings JsonSettings = new()
     {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Formatting = Formatting.Indented,
+        NullValueHandling = NullValueHandling.Ignore,
+        ObjectCreationHandling = ObjectCreationHandling.Replace,
+        ContractResolver = new CamelCasePropertyNamesContractResolver(),
     };
 
     private readonly ILogService _log;
@@ -44,7 +46,7 @@ public sealed class JsonModStateStore : IModStateStore
             }
 
             var json = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
-            var state = JsonSerializer.Deserialize<ModState>(json, JsonOptions);
+            var state = JsonConvert.DeserializeObject<ModState>(json, JsonSettings);
 
             if (state is null)
             {
@@ -87,7 +89,7 @@ public sealed class JsonModStateStore : IModStateStore
             Directory.CreateDirectory(StateDirectory);
             state.Version = ModState.CurrentVersion;
 
-            var json = JsonSerializer.Serialize(state, JsonOptions);
+            var json = JsonConvert.SerializeObject(state, JsonSettings);
             await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
             File.Move(temporaryPath, path, overwrite: true);
         }

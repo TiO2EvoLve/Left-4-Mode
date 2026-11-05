@@ -2,11 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Left_4_Mod.Infrastructure;
 using Left_4_Mod.Models;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 
 namespace Left_4_Mod.Services;
 
@@ -29,11 +30,12 @@ public sealed class DeploymentException : Exception
 /// </summary>
 public sealed class DeploymentService : IDeploymentService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerSettings JsonSettings = new()
     {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Formatting = Formatting.Indented,
+        NullValueHandling = NullValueHandling.Ignore,
+        ObjectCreationHandling = ObjectCreationHandling.Replace,
+        ContractResolver = new CamelCasePropertyNamesContractResolver(),
     };
 
     private readonly IModLibraryService _library;
@@ -58,7 +60,7 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             var json = await File.ReadAllTextAsync(ManifestFilePath, cancellationToken).ConfigureAwait(false);
-            var manifest = JsonSerializer.Deserialize<DeploymentManifest>(json, JsonOptions) ??
+            var manifest = JsonConvert.DeserializeObject<DeploymentManifest>(json, JsonSettings) ??
                            new DeploymentManifest();
 
             manifest.Version = DeploymentManifest.CurrentVersion;
@@ -686,7 +688,7 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             manifest.Version = DeploymentManifest.CurrentVersion;
-            var json = JsonSerializer.Serialize(manifest, JsonOptions);
+            var json = JsonConvert.SerializeObject(manifest, JsonSettings);
             await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
             File.Move(temporaryPath, ManifestFilePath, overwrite: true);
         }

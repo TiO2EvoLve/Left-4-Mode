@@ -23,6 +23,9 @@ namespace Left_4_Mod.Views;
 public partial class MainWindow : SukiWindow
 {
     private MainViewModel? _viewModel;
+    private ListBox? _activeFileList;
+    private string? _lastFolderClickPath;
+    private long _lastFolderClickAt;
     private bool _dialogOpen;
     private DispatcherTimer? _workshopTimer;
     private ContextMenu? _openContextMenu;
@@ -34,6 +37,25 @@ public partial class MainWindow : SukiWindow
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         AddHandler(PointerPressedEvent, OnGlobalPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ModList.AddHandler(
+            InputElement.PointerPressedEvent,
+            OnModListPointerPressed,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+        IconList.AddHandler(
+            InputElement.PointerPressedEvent,
+            OnModListPointerPressed,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+        ModList.AddHandler(
+            KeyDownEvent,
+            OnFileListKeyDown,
+            RoutingStrategies.Tunnel);
+        IconList.AddHandler(
+            KeyDownEvent,
+            OnFileListKeyDown,
+            RoutingStrategies.Tunnel);
+        _activeFileList = ModList;
         Deactivated += OnWindowDeactivated;
         Opened += OnWindowOpened;
         Closing += OnWindowClosing;
@@ -171,7 +193,15 @@ public partial class MainWindow : SukiWindow
     private void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
         _workshopTimer?.Stop();
-        _ = _viewModel?.SaveSettingsAsync();
+
+        try
+        {
+            _viewModel?.SaveSettingsAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _viewModel?.ReportViewWarning($"保存设置失败：{ex.Message}", ex);
+        }
     }
 
     private void StartWorkshopTimer()
@@ -331,7 +361,88 @@ public partial class MainWindow : SukiWindow
 
     private void OnModSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        _viewModel?.SetSelection(ModList.SelectedItems?.OfType<ModItem>() ?? []);
+        if (_viewModel is null || sender is not ListBox list)
+        {
+            return;
+        }
+
+        _activeFileList = list;
+        var rows = GetSelectedRows(list);
+        var mods = rows
+            .Where(row => row.Mod is not null)
+            .Select(row => row.Mod!)
+            .ToArray();
+
+        _viewModel.SetSelection(mods);
+    }
+
+    private List<FileRow> GetSelectedRows(ListBox? list = null) =>
+        (list ?? _activeFileList)?.SelectedItems?.OfType<FileRow>().ToList() ?? [];
+
+    private void OnFileListKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_viewModel is null)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            var folder = GetSelectedRows().SingleOrDefault(row => row.IsFolder);
+            if (folder is not null)
+            {
+                e.Handled = true;
+                _viewModel.NavigateTo(folder.RelativePath);
+            }
+        }
+        else if (e.Key == Key.Back)
+        {
+            e.Handled = true;
+            _viewModel.NavigateUp();
+        }
+    }
+
+    private void OnFileListDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (_viewModel is null)
+        {
+            return;
+        }
+
+        var folder = GetSelectedRows().FirstOrDefault(row => row.IsFolder);
+        if (folder is not null)
+        {
+            e.Handled = true;
+            _viewModel.NavigateTo(folder.RelativePath);
+        }
+    }
+
+    private void OnNavigateBackClick(object? sender, RoutedEventArgs e) => _viewModel?.NavigateBack();
+
+    private void OnNavigateForwardClick(object? sender, RoutedEventArgs e) => _viewModel?.NavigateForward();
+
+    private void OnNavigateUpClick(object? sender, RoutedEventArgs e) => _viewModel?.NavigateUp();
+
+    private void OnBreadcrumbClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is not null && sender is Button { Tag: string relativePath })
+        {
+            _viewModel.NavigateTo(relativePath);
+        }
+    }
+
+    private void OnDetailsViewClick(object? sender, RoutedEventArgs e)
+    {
+        _viewModel?.SetViewMode(FileViewMode.Details);
+        _activeFileList = ModList;
+        ModList.Focus();
+    }
+
+    private void OnLargeIconsViewClick(object? sender, RoutedEventArgs e)
+    {
+        _viewModel?.SetViewMode(FileViewMode.LargeIcons);
+        _activeFileList = IconList;
+        IconList.Focus();
     }
 
     private async void OnEnableSelectedClick(object? sender, RoutedEventArgs e)
@@ -360,15 +471,21 @@ public partial class MainWindow : SukiWindow
 
     private void OnRevealInExplorerClick(object? sender, RoutedEventArgs e)
     {
-        var item = _viewModel?.SelectedMods.FirstOrDefault();
-        if (item is null)
+        var rows = GetSelectedRows();
+        if (rows.Count != 1)
         {
             return;
         }
 
+        var row = rows[0];
+
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{item.FullPath}\"")
+            var arguments = row.IsFolder
+                ? $"\"{_viewModel?.GetFullPath(row.RelativePath)}\""
+                : $"/select,\"{row.Mod?.FullPath}\"";
+
+            Process.Start(new ProcessStartInfo("explorer.exe", arguments)
             {
                 UseShellExecute = true,
             });
@@ -651,6 +768,25 @@ public partial class MainWindow : SukiWindow
             return;
         }
 
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+        {
+            switch (e.Key)
+            {
+                case Key.Left:
+                    e.Handled = true;
+                    _viewModel.NavigateBack();
+                    return;
+                case Key.Right:
+                    e.Handled = true;
+                    _viewModel.NavigateForward();
+                    return;
+                case Key.Up:
+                    e.Handled = true;
+                    _viewModel.NavigateUp();
+                    return;
+            }
+        }
+
         var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var focusedIsTextInput = FocusManager?.GetFocusedElement() is TextBox;
 
@@ -706,28 +842,54 @@ public partial class MainWindow : SukiWindow
     private void OnModListPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (_viewModel is null ||
-            !e.GetCurrentPoint(ModList).Properties.IsRightButtonPressed ||
+            sender is not ListBox list ||
             e.Source is not Visual source)
         {
             return;
         }
 
         var listBoxItem = source.FindAncestorOfType<ListBoxItem>(includeSelf: true);
-        if (listBoxItem?.DataContext is not ModItem mod)
+        if (listBoxItem?.DataContext is not FileRow row)
         {
             return;
         }
 
-        var selectedItems = ModList.SelectedItems;
+        _activeFileList = list;
+
+        if (e.GetCurrentPoint(list).Properties.IsLeftButtonPressed && row.IsFolder)
+        {
+            var now = Environment.TickCount64;
+            if (string.Equals(_lastFolderClickPath, row.RelativePath, StringComparison.OrdinalIgnoreCase) &&
+                now - _lastFolderClickAt <= 500)
+            {
+                _lastFolderClickPath = null;
+                e.Handled = true;
+                _viewModel.NavigateTo(row.RelativePath);
+                return;
+            }
+
+            _lastFolderClickPath = row.RelativePath;
+            _lastFolderClickAt = now;
+            return;
+        }
+
+        _lastFolderClickPath = null;
+
+        if (!e.GetCurrentPoint(list).Properties.IsRightButtonPressed)
+        {
+            return;
+        }
+
+        var selectedItems = list.SelectedItems;
         if (selectedItems is null)
         {
             return;
         }
 
-        if (!selectedItems.Contains(mod))
+        if (!selectedItems.Contains(row))
         {
             selectedItems.Clear();
-            selectedItems.Add(mod);
+            selectedItems.Add(row);
         }
     }
 
@@ -738,13 +900,23 @@ public partial class MainWindow : SukiWindow
             return;
         }
 
-        var parent = _viewModel.SelectedGroup?.RelativePath ?? string.Empty;
+        var parent = _viewModel.CurrentFolderPath;
+        await CreateFolderAsync(parent, "新建文件夹");
+    }
+
+    private async Task CreateFolderAsync(string parent, string title)
+    {
+        if (_viewModel is null)
+        {
+            return;
+        }
+
         var parentDisplay = string.IsNullOrEmpty(parent)
             ? "模组库根目录"
             : parent.Replace('\\', '/');
 
         var window = new NameWindow(
-            "新建文件夹",
+            title,
             $"将在“{parentDisplay}”下创建文件夹。",
             string.Empty);
 
@@ -757,7 +929,7 @@ public partial class MainWindow : SukiWindow
         var result = await _viewModel.CreateFolderAsync(name, parent);
         if (!result.Success)
         {
-            await ShowInfoAsync(result.Message, "新建文件夹");
+            await ShowInfoAsync(result.Message, title);
         }
     }
 
@@ -797,7 +969,7 @@ public partial class MainWindow : SukiWindow
 
         var selected = _viewModel.SelectedMods.ToList();
         var choices = _viewModel.GetFolderChoices();
-        var initialPath = _viewModel.SelectedGroup?.RelativePath ?? string.Empty;
+        var initialPath = _viewModel.CurrentFolderPath;
 
         var window = new MoveWindow(selected.Count, choices, initialPath);
         var destination = await window.ShowDialog<FolderChoice?>(this);
@@ -841,6 +1013,41 @@ public partial class MainWindow : SukiWindow
         }
     }
 
+    private async void OnDeleteFolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null)
+        {
+            return;
+        }
+
+        var folder = GetSelectedRows()
+            .SingleOrDefault(row => row.IsFolder);
+
+        if (folder is null)
+        {
+            return;
+        }
+
+        var info = await _viewModel.GetDeleteInfoForPathAsync(folder.RelativePath);
+        var size = FileSystemService.FormatSize(info.TotalBytes);
+
+        var message =
+            $"将文件夹“{folder.Name}”及其中的 {info.FileCount} 个文件、{info.FolderCount} 个子文件夹（{size}）移动到回收站？" +
+            $"{Environment.NewLine}{Environment.NewLine}" +
+            "文件夹内已部署的符号链接会一并清理；之后仍可从回收站恢复。";
+
+        if (!await ConfirmAsync(message, "删除文件夹", "确认删除文件夹"))
+        {
+            return;
+        }
+
+        var result = await _viewModel.DeleteFolderAsync(folder);
+        if (!result.Success)
+        {
+            await ShowInfoAsync(result.Message, "删除文件夹");
+        }
+    }
+
     private void OnContextMenuOpening(object? sender, CancelEventArgs e)
     {
         if (_viewModel is null || sender is not ContextMenu menu || _dialogOpen)
@@ -854,18 +1061,25 @@ public partial class MainWindow : SukiWindow
         }
 
         _openContextMenu = menu;
-        var selected = _viewModel.SelectedMods;
-        var hasSelection = selected.Count > 0 && !_viewModel.IsBusy;
-        var hasSingleSelection = selected.Count == 1 && !_viewModel.IsBusy;
+        var rows = GetSelectedRows();
+        var folders = rows.Where(row => row.IsFolder).ToArray();
+        var mods = rows.Where(row => row.Mod is not null).ToArray();
+        var busy = _viewModel.IsBusy;
+        var folderOnly = folders.Length == 1 && mods.Length == 0 && !busy;
+        var modsOnly = mods.Length > 0 && folders.Length == 0 && !busy;
+        var singleMod = modsOnly && mods.Length == 1;
+        var singleRow = rows.Count == 1 && !busy;
 
         foreach (var item in menu.Items.OfType<MenuItem>())
         {
             item.IsEnabled = item.Tag switch
             {
-                "enable" or "disable" or "reveal" => hasSelection,
-                "rename" => hasSingleSelection,
-                "move" or "delete" => hasSelection,
+                "enable" or "disable" => modsOnly,
+                "rename" => singleMod,
+                "move" or "delete" => modsOnly,
+                "deletefolder" => folderOnly,
                 "newfolder" => _viewModel.CanModify,
+                "reveal" => singleRow,
                 "refresh" => _viewModel.CanRefresh,
                 _ => true,
             };

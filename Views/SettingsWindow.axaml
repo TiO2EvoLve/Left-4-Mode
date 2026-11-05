@@ -44,29 +44,7 @@
                                TextWrapping="Wrap"
                                Opacity="0.7" />
                 </StackPanel>
-
-                <Rectangle Height="1" Fill="#22808080" />
-
-                <StackPanel Spacing="8">
-                    <TextBlock Text="推送方式：符号链接" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Text="推送时只在游戏 addons 目录中创建指向模组库源 VPK 的符号链接（l4m_*.vpk），不会复制源文件。游戏会直接读取模组库中的文件。"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               Opacity="0.7" />
-                    <TextBlock Text="Windows 需要开启开发者模式或以管理员身份运行，并且文件系统需支持符号链接（NTFS）。"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               Opacity="0.7" />
-                    <TextBlock Text="推送只会新增、更新或清理本管理器登记的 l4m_*.vpk 符号链接；不会覆盖或删除你手动放入 addons 的文件。"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               Opacity="0.7" />
-                    <TextBlock Text="注意：更改游戏目录或模组库不会自动清理旧位置中已经由管理器创建的链接。"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               Opacity="0.7" />
-                </StackPanel>
-
+                
                 <Rectangle Height="1" Fill="#22808080" />
 
                 <StackPanel Spacing="8">

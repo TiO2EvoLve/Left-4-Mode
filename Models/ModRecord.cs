@@ -1,7 +1,9 @@
+
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace Left_4_Mod.Models;
 
@@ -37,10 +39,10 @@ public sealed class ModRecord
 
     public DateTime LastModifiedUtc { get; set; }
 
-    [JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
     public string FileName => Path.GetFileName(RelativePath);
 
-    [JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
     public bool IsWorkshop => WorkshopId.HasValue;
 }
 

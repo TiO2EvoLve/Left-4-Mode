@@ -23,13 +23,19 @@ public sealed partial class MainViewModel : ViewModelBase
     private readonly IDeploymentService _deployment;
     private readonly IGamePathService _gamePathService;
     private readonly IWorkshopService _workshop;
+    private readonly IModThumbnailService _thumbnails;
     private readonly ISettingsService _settings;
     private readonly ILogService _log;
     private readonly AppSettings _appSettings;
     private readonly List<ModItem> _allMods = [];
+    private readonly Stack<string> _backHistory = new();
+    private readonly Stack<string> _forwardHistory = new();
     private IReadOnlyList<string> _libraryFolders = [];
+    private string _currentFolder = string.Empty;
+    private FileViewMode _viewMode = FileViewMode.Details;
 
     private CancellationTokenSource? _operationCts;
+    private CancellationTokenSource? _thumbnailCts;
     private ModCatalog? _catalog;
     private string _searchText = string.Empty;
     private string _sortField = "Name";
@@ -65,6 +71,7 @@ public sealed partial class MainViewModel : ViewModelBase
         IDeploymentService deployment,
         IGamePathService gamePath,
         IWorkshopService workshop,
+        IModThumbnailService thumbnails,
         ISettingsService settings,
         ILogService log)
     {
@@ -73,6 +80,7 @@ public sealed partial class MainViewModel : ViewModelBase
         _deployment = deployment;
         _gamePathService = gamePath;
         _workshop = workshop;
+        _thumbnails = thumbnails;
         _settings = settings;
         _log = log;
         _appSettings = _settings.Load();
@@ -101,6 +109,10 @@ public sealed partial class MainViewModel : ViewModelBase
     }
 
     public ObservableCollection<ModItem> Mods { get; } = [];
+
+    public ObservableCollection<FileRow> Rows { get; } = [];
+
+    public ObservableCollection<BreadcrumbItem> Breadcrumbs { get; } = [];
 
     public ObservableCollection<ModItem> SelectedMods { get; } = [];
 
@@ -229,15 +241,40 @@ public sealed partial class MainViewModel : ViewModelBase
 
     public bool IsFilterActive =>
         !string.IsNullOrWhiteSpace(SearchText) ||
-        SelectedGroup?.RelativePath is not null ||
         SelectedEnabledFilter?.Value != ModEnabledFilter.All ||
         SelectedDeploymentFilter?.Value != ModDeploymentFilter.All;
 
     public bool IsEmptyLibrary =>
-        HasLibrary && !IsBusy && ModCount == 0;
+        HasLibrary && !IsBusy && ModCount == 0 && _libraryFolders.Count == 0;
 
     public bool HasNoResults =>
-        HasLibrary && !IsBusy && ModCount > 0 && Mods.Count == 0 && IsFilterActive;
+        HasLibrary && !IsBusy && IsFilterActive && Rows.Count == 0;
+
+    public bool IsCurrentFolderEmpty =>
+        HasLibrary && !IsBusy && !IsFilterActive && Rows.Count == 0 && !IsEmptyLibrary;
+
+    public bool CanNavigateBack => _backHistory.Count > 0;
+
+    public bool CanNavigateForward => _forwardHistory.Count > 0;
+
+    public bool CanNavigateUp => _currentFolder.Length > 0;
+
+    public bool IsDetailsView => _viewMode == FileViewMode.Details;
+
+    public bool IsLargeIconsView => _viewMode == FileViewMode.LargeIcons;
+
+    public bool ShowDetailsHeader => HasLibrary && IsDetailsView;
+
+    public string CurrentFolderDisplay =>
+        _currentFolder.Length == 0 ? "模组库" : _currentFolder.Replace('\\', '/');
+
+    public string CurrentFolderPath => _currentFolder;
+
+    public string NoResultsTitle => "没有匹配的项目";
+
+    public string NoResultsHint => "换个关键词，或清除筛选。";
+
+    public string NoResultsActionText => "清除筛选";
 
     public string FilterSummary
     {
@@ -248,11 +285,6 @@ public sealed partial class MainViewModel : ViewModelBase
             if (!string.IsNullOrWhiteSpace(SearchText))
             {
                 parts.Add($"搜索“{SearchText.Trim()}”");
-            }
-
-            if (SelectedGroup?.RelativePath is not null)
-            {
-                parts.Add($"分组：{SelectedGroup.DisplayName}");
             }
 
             if (SelectedEnabledFilter is not null &&
@@ -410,7 +442,10 @@ public sealed partial class MainViewModel : ViewModelBase
         _appSettings.GamePath = gameInfo?.GameRoot;
         _appSettings.DeploymentStrategy = "SymbolicLink";
 
-        await SaveSettingsAsync();
+        if (!await SaveSettingsAsync())
+        {
+            return (false, Message);
+        }
 
         if (libraryChanged)
         {
@@ -521,6 +556,170 @@ public sealed partial class MainViewModel : ViewModelBase
         SelectedGroup = GroupOptions.FirstOrDefault();
         SelectedEnabledFilter = EnabledFilterOptions[0];
         SelectedDeploymentFilter = DeploymentFilterOptions[0];
+    }
+
+    public void NavigateTo(string relativePath, bool addHistory = true)
+    {
+        if (!HasLibrary)
+        {
+            return;
+        }
+
+        var normalized = NormalizeFolderPath(relativePath);
+        if (normalized is null)
+        {
+            Message = $"文件夹不存在：{relativePath}";
+            return;
+        }
+
+        if (string.Equals(normalized, _currentFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (addHistory)
+        {
+            _backHistory.Push(_currentFolder);
+            _forwardHistory.Clear();
+        }
+
+        _currentFolder = normalized;
+        ApplyFilter();
+        NotifyNavigationChanged();
+    }
+
+    public void NavigateBack()
+    {
+        if (_backHistory.Count == 0)
+        {
+            return;
+        }
+
+        var target = _backHistory.Pop();
+        _forwardHistory.Push(_currentFolder);
+        _currentFolder = target;
+        ApplyFilter();
+        NotifyNavigationChanged();
+    }
+
+    public void NavigateForward()
+    {
+        if (_forwardHistory.Count == 0)
+        {
+            return;
+        }
+
+        var target = _forwardHistory.Pop();
+        _backHistory.Push(_currentFolder);
+        _currentFolder = target;
+        ApplyFilter();
+        NotifyNavigationChanged();
+    }
+
+    public void NavigateUp()
+    {
+        var parent = GetParentFolderPath(_currentFolder);
+        if (parent is not null)
+        {
+            NavigateTo(parent);
+        }
+    }
+
+    public void SetViewMode(FileViewMode mode)
+    {
+        if (_viewMode == mode)
+        {
+            return;
+        }
+
+        _viewMode = mode;
+        this.RaisePropertyChanged(nameof(IsDetailsView));
+        this.RaisePropertyChanged(nameof(IsLargeIconsView));
+        this.RaisePropertyChanged(nameof(ShowDetailsHeader));
+    }
+
+    private string? NormalizeFolderPath(string relativePath)
+    {
+        if (!HasLibrary)
+        {
+            return null;
+        }
+
+        try
+        {
+            var normalized = string.IsNullOrWhiteSpace(relativePath)
+                ? string.Empty
+                : _library.GetRelativePath(_library.GetFullPath(relativePath));
+
+            normalized = normalized
+                .Trim(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (normalized.Length > 0 && !Directory.Exists(_library.GetFullPath(normalized)))
+            {
+                return null;
+            }
+
+            return normalized;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? GetParentFolderPath(string relativePath)
+    {
+        if (relativePath.Length == 0)
+        {
+            return null;
+        }
+
+        var parent = Path.GetDirectoryName(relativePath);
+        return parent ?? string.Empty;
+    }
+
+    private void NotifyNavigationChanged()
+    {
+        this.RaisePropertyChanged(nameof(CanNavigateBack));
+        this.RaisePropertyChanged(nameof(CanNavigateForward));
+        this.RaisePropertyChanged(nameof(CanNavigateUp));
+        this.RaisePropertyChanged(nameof(CurrentFolderDisplay));
+        this.RaisePropertyChanged(nameof(CurrentFolderPath));
+        BuildBreadcrumbs();
+    }
+
+    private void BuildBreadcrumbs()
+    {
+        Breadcrumbs.Clear();
+        if (!HasLibrary)
+        {
+            return;
+        }
+
+        Breadcrumbs.Add(new BreadcrumbItem("模组库", string.Empty, _currentFolder.Length == 0, true));
+
+        if (_currentFolder.Length == 0)
+        {
+            return;
+        }
+
+        var parts = _currentFolder.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+
+        var current = string.Empty;
+        for (var index = 0; index < parts.Length; index++)
+        {
+            current = string.IsNullOrEmpty(current)
+                ? parts[index]
+                : Path.Combine(current, parts[index]);
+
+            Breadcrumbs.Add(new BreadcrumbItem(
+                parts[index],
+                current,
+                index == parts.Length - 1,
+                false));
+        }
     }
 
     public ImportPlan? CreateImportPlan(IReadOnlyList<string> sourceFiles)
@@ -820,7 +1019,6 @@ public sealed partial class MainViewModel : ViewModelBase
         }
 
         await LoadCatalogAsync();
-        SelectGroup(createdRelativePath);
         Message = $"已创建文件夹：{createdRelativePath.Replace('\\', '/')}";
         return FileOperationResult.Ok(Message);
     }
@@ -978,7 +1176,6 @@ public sealed partial class MainViewModel : ViewModelBase
         if (movedRecords.Count > 0)
         {
             await LoadCatalogAsync();
-            SelectGroup(destinationRelativePath);
             Message = $"已移动 {movedRecords.Count} 个模组到：{FormatGroup(destinationRelativePath)}";
         }
         else if (skipped > 0 && errors.Count == 0)
@@ -1052,6 +1249,94 @@ public sealed partial class MainViewModel : ViewModelBase
         return FileOperationResult.Ok(Message);
     }
 
+    public async Task<DeleteInfo> GetDeleteInfoForPathAsync(string relativePath)
+    {
+        if (!HasLibrary || string.IsNullOrWhiteSpace(relativePath))
+        {
+            return new DeleteInfo(0, 0, 0);
+        }
+
+        try
+        {
+            return await _library
+                .GetDeleteInfoAsync([relativePath], CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"读取文件夹删除信息失败：{ex.Message}");
+            return new DeleteInfo(0, 1, 0);
+        }
+    }
+
+    public async Task<FileOperationResult> DeleteFolderAsync(FileRow folder)
+    {
+        if (!HasLibrary || IsBusy || _catalog is null || !folder.IsFolder)
+        {
+            return FileOperationResult.Fail("当前无法删除文件夹。");
+        }
+
+        var removedIds = new List<string>();
+        var token = BeginOperation("正在删除文件夹…", indeterminate: true);
+
+        try
+        {
+            await _library.DeleteAsync([folder.RelativePath], token).ConfigureAwait(true);
+
+            var prefix = folder.RelativePath + Path.DirectorySeparatorChar;
+            var removed = _catalog.State.Mods
+                .Where(record =>
+                    string.Equals(record.RelativePath, folder.RelativePath, StringComparison.OrdinalIgnoreCase) ||
+                    record.RelativePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            removedIds.AddRange(removed.Select(record => record.Id));
+            var removedIdSet = removedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _catalog.State.Mods.RemoveAll(record => removedIdSet.Contains(record.Id));
+
+            await _catalogService.SaveStateAsync(_catalog.State, token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = "已取消删除文件夹。";
+            return FileOperationResult.Fail(Message);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "删除文件夹失败");
+            Message = $"删除文件夹失败：{ex.Message}";
+            return FileOperationResult.Fail(Message);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        var prefixPath = folder.RelativePath + Path.DirectorySeparatorChar;
+        var deletedFolder = folder.RelativePath;
+        var parentPath = GetParentFolderPath(deletedFolder) ?? string.Empty;
+        var currentWasDeleted =
+            string.Equals(_currentFolder, deletedFolder, StringComparison.OrdinalIgnoreCase) ||
+            _currentFolder.StartsWith(prefixPath, StringComparison.OrdinalIgnoreCase);
+
+        if (currentWasDeleted)
+        {
+            _currentFolder = parentPath;
+            _backHistory.Clear();
+            _forwardHistory.Clear();
+        }
+
+        if (removedIds.Count > 0)
+        {
+            await SyncDeploymentsAfterChangeAsync([], removedIds).ConfigureAwait(true);
+        }
+
+        await LoadCatalogAsync();
+        NotifyNavigationChanged();
+        Message = $"已将文件夹“{folder.Name}”及其中内容移动到回收站。";
+        return FileOperationResult.Ok(Message);
+    }
+
     private async Task<string?> SaveAndSyncMovedRecordsAsync(
         IReadOnlyList<ModRecord> records,
         IReadOnlyList<string> removedIds)
@@ -1103,17 +1388,6 @@ public sealed partial class MainViewModel : ViewModelBase
         {
             _log.Error(ex, "同步部署链接失败");
             return "部分部署链接未能同步，请手动推送。";
-        }
-    }
-
-    private void SelectGroup(string relativePath)
-    {
-        var option = GroupOptions.FirstOrDefault(candidate =>
-            string.Equals(candidate.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase));
-
-        if (option is not null)
-        {
-            SelectedGroup = option;
         }
     }
 
@@ -1254,7 +1528,7 @@ public sealed partial class MainViewModel : ViewModelBase
         Message = message;
     }
 
-    public async Task SaveSettingsAsync()
+    public async Task<bool> SaveSettingsAsync()
     {
         _appSettings.LibraryPath = _library.RootPath;
         _appSettings.GamePath = IsGameReady ? GamePath : null;
@@ -1263,10 +1537,13 @@ public sealed partial class MainViewModel : ViewModelBase
         try
         {
             await _settings.SaveAsync(_appSettings).ConfigureAwait(false);
+            return true;
         }
         catch (Exception ex)
         {
             _log.Error(ex, "保存设置失败");
+            Message = $"保存设置失败：{ex.Message}";
+            return false;
         }
     }
 
@@ -1303,7 +1580,9 @@ public sealed partial class MainViewModel : ViewModelBase
             }
 
             BuildGroupOptions();
+            EnsureCurrentFolderValid();
             ApplyFilter();
+            NotifyNavigationChanged();
             UpdateCounts();
 
             Message = _allMods.Count == 0
@@ -1340,6 +1619,20 @@ public sealed partial class MainViewModel : ViewModelBase
         _libraryFolders = [];
         Mods.Clear();
         SelectedMods.Clear();
+        var previousRows = Rows.ToArray();
+        Rows.Clear();
+        foreach (var row in previousRows)
+        {
+            row.DisposeThumbnail();
+        }
+
+        Breadcrumbs.Clear();
+        _thumbnailCts?.Cancel();
+        _thumbnailCts?.Dispose();
+        _thumbnailCts = null;
+        _currentFolder = string.Empty;
+        _backHistory.Clear();
+        _forwardHistory.Clear();
 
         _suppressFilterApply = true;
         try
@@ -1526,6 +1819,16 @@ public sealed partial class MainViewModel : ViewModelBase
         }
     }
 
+    private void EnsureCurrentFolderValid()
+    {
+        while (_currentFolder.Length > 0 &&
+               !_libraryFolders.Any(folder =>
+                   string.Equals(folder, _currentFolder, StringComparison.OrdinalIgnoreCase)))
+        {
+            _currentFolder = GetParentFolderPath(_currentFolder) ?? string.Empty;
+        }
+    }
+
     private void ApplyFilter()
     {
         if (_suppressFilterApply)
@@ -1533,13 +1836,10 @@ public sealed partial class MainViewModel : ViewModelBase
             return;
         }
 
-        IEnumerable<ModItem> query = _allMods;
+        var search = SearchText.Trim();
 
-        if (SelectedGroup?.RelativePath is { } groupPath)
-        {
-            query = query.Where(item =>
-                string.Equals(item.GroupPath, groupPath, StringComparison.OrdinalIgnoreCase));
-        }
+        IEnumerable<ModItem> query = _allMods.Where(item =>
+            string.Equals(item.GroupPath, _currentFolder, StringComparison.OrdinalIgnoreCase));
 
         if (SelectedEnabledFilter?.Value == ModEnabledFilter.Enabled)
         {
@@ -1559,45 +1859,136 @@ public sealed partial class MainViewModel : ViewModelBase
             query = query.Where(item => item.DeploymentState != ModDeploymentState.Deployed);
         }
 
-        var search = SearchText.Trim();
         if (search.Length > 0)
         {
             query = query.Where(item =>
                 item.DisplayName.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
-                item.FileName.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
-                item.GroupDisplay.Contains(search, StringComparison.CurrentCultureIgnoreCase));
+                item.FileName.Contains(search, StringComparison.CurrentCultureIgnoreCase));
         }
 
-        var ordered = query
-            .OrderBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase);
-
-        var sorted = _sortField switch
-        {
-            "Group" => _sortDescending
-                ? ordered.OrderByDescending(item => item.GroupDisplay, StringComparer.CurrentCultureIgnoreCase)
-                    .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
-                : ordered.OrderBy(item => item.GroupDisplay, StringComparer.CurrentCultureIgnoreCase)
-                    .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase),
-            "Size" => _sortDescending
-                ? ordered.ThenByDescending(item => item.Size)
-                : ordered.ThenBy(item => item.Size),
-            "Modified" => _sortDescending
-                ? ordered.ThenByDescending(item => item.LastModifiedUtc)
-                : ordered.ThenBy(item => item.LastModifiedUtc),
-            _ => _sortDescending
-                ? ordered.ThenByDescending(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
-                : ordered.ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase),
-        };
+        var sortedMods = SortMods(query).ToArray();
 
         Mods.Clear();
-        foreach (var item in sorted)
+        foreach (var item in sortedMods)
         {
             Mods.Add(item);
         }
 
+        BuildCurrentFolderRows(search, sortedMods);
+
         SelectedMods.Clear();
         UpdateCounts();
         UpdateStates();
+    }
+
+    private void BuildCurrentFolderRows(string search, IReadOnlyList<ModItem> sortedMods)
+    {
+        _thumbnailCts?.Cancel();
+        _thumbnailCts?.Dispose();
+        _thumbnailCts = new CancellationTokenSource();
+        var thumbnailToken = _thumbnailCts.Token;
+
+        var previousRows = Rows.ToArray();
+        Rows.Clear();
+        foreach (var row in previousRows)
+        {
+            row.DisposeThumbnail();
+        }
+
+        var childFolders = _libraryFolders
+            .Where(path => string.Equals(
+                GetParentFolderPath(path) ?? string.Empty,
+                _currentFolder,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(path => search.Length == 0 ||
+                           Path.GetFileName(path).Contains(search, StringComparison.CurrentCultureIgnoreCase))
+            .OrderBy(path => Path.GetFileName(path), StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+
+        foreach (var folder in childFolders)
+        {
+            Rows.Add(FileRow.Folder(
+                Path.GetFileName(folder),
+                folder,
+                CountModsInFolder(folder),
+                CountChildFolders(folder),
+                _thumbnails.FolderImage));
+        }
+
+        foreach (var mod in sortedMods)
+        {
+            var row = FileRow.ForMod(mod, _thumbnails.PlaceholderImage);
+            Rows.Add(row);
+            _ = LoadThumbnailAsync(row, mod, thumbnailToken);
+        }
+    }
+
+    private async Task LoadThumbnailAsync(
+        FileRow row,
+        ModItem mod,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var bitmap = await Task.Run(
+                    () => _thumbnails.LoadAsync(mod.Record, mod.FullPath, cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(true);
+
+            if (bitmap is null)
+            {
+                return;
+            }
+
+            if (cancellationToken.IsCancellationRequested || !Rows.Contains(row))
+            {
+                bitmap.Dispose();
+                return;
+            }
+
+            row.SetThumbnail(bitmap);
+        }
+        catch (OperationCanceledException)
+        {
+            // 切换目录后取消旧缩略图加载。
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"加载缩略图失败：{mod.RelativePath}（{ex.Message}）");
+        }
+    }
+
+    private int CountModsInFolder(string relativePath)
+    {
+        var prefix = relativePath + Path.DirectorySeparatorChar;
+        return _allMods.Count(item =>
+            string.Equals(item.GroupPath, relativePath, StringComparison.OrdinalIgnoreCase) ||
+            item.GroupPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private int CountChildFolders(string relativePath) =>
+        _libraryFolders.Count(path => string.Equals(
+            GetParentFolderPath(path) ?? string.Empty,
+            relativePath,
+            StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<ModItem> SortMods(IEnumerable<ModItem> mods)
+    {
+        var baseline = mods
+            .OrderBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase);
+
+        return _sortField switch
+        {
+            "Size" => _sortDescending
+                ? baseline.OrderByDescending(item => item.Size)
+                : baseline.OrderBy(item => item.Size),
+            "Modified" => _sortDescending
+                ? baseline.OrderByDescending(item => item.LastModifiedUtc)
+                : baseline.OrderBy(item => item.LastModifiedUtc),
+            _ => _sortDescending
+                ? baseline.OrderByDescending(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                : baseline.OrderBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase),
+        };
     }
 
     private void UpdateCounts()
@@ -1623,13 +2014,20 @@ public sealed partial class MainViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(FilterSummary));
         this.RaisePropertyChanged(nameof(IsEmptyLibrary));
         this.RaisePropertyChanged(nameof(HasNoResults));
+        this.RaisePropertyChanged(nameof(IsCurrentFolderEmpty));
+        this.RaisePropertyChanged(nameof(ShowDetailsHeader));
+        this.RaisePropertyChanged(nameof(CurrentFolderDisplay));
+        this.RaisePropertyChanged(nameof(NoResultsTitle));
+        this.RaisePropertyChanged(nameof(NoResultsHint));
+        this.RaisePropertyChanged(nameof(NoResultsActionText));
         this.RaisePropertyChanged(nameof(StatusText));
         this.RaisePropertyChanged(nameof(SelectionStatus));
         this.RaisePropertyChanged(nameof(ModSummary));
     }
 
-    private string GetImportTargetGroup() =>
-        SelectedGroup?.RelativePath ?? string.Empty;
+    public string GetFullPath(string relativePath) => _library.GetFullPath(relativePath);
+
+    private string GetImportTargetGroup() => _currentFolder;
 
     private CancellationToken BeginOperation(string text, bool indeterminate, bool canCancel = true)
     {
@@ -1680,3 +2078,4 @@ public sealed partial class MainViewModel : ViewModelBase
         ErrorRaised?.Invoke(message);
     }
 }
+
