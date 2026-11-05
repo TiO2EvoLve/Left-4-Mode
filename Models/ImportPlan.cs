@@ -3,17 +3,11 @@ using System.Collections.Generic;
 
 namespace Left_4_Mod.Models;
 
-public sealed class ImportPlan
+public sealed class ImportPlan(string destinationRelativePath, IReadOnlyList<ImportPlanItem> items)
 {
-    public ImportPlan(string destinationRelativePath, IReadOnlyList<ImportPlanItem> items)
-    {
-        DestinationRelativePath = destinationRelativePath;
-        Items = items;
-    }
+    public string DestinationRelativePath { get; } = destinationRelativePath;
 
-    public string DestinationRelativePath { get; }
-
-    public IReadOnlyList<ImportPlanItem> Items { get; }
+    public IReadOnlyList<ImportPlanItem> Items { get; } = items;
 
     public int RenamedCount
     {

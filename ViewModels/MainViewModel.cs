@@ -224,11 +224,6 @@ public sealed partial class MainViewModel : ViewModelBase
         }
     }
 
-    public string WindowTitle =>
-        HasLibrary
-            ? $"{LibraryName} — L4D2 模组管理器"
-            : "L4D2 模组管理器";
-
     public bool ShowWelcome => !HasLibrary;
 
     public bool HasSelection => SelectedMods.Count > 0;
@@ -2141,7 +2136,6 @@ public sealed partial class MainViewModel : ViewModelBase
 
     private void UpdateStates()
     {
-        this.RaisePropertyChanged(nameof(WindowTitle));
         this.RaisePropertyChanged(nameof(ShowWelcome));
         this.RaisePropertyChanged(nameof(HasSelection));
         this.RaisePropertyChanged(nameof(CanModify));

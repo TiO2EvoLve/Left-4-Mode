@@ -14,31 +14,22 @@ public sealed record WorkshopItemInfo(
     long FileSize,
     IReadOnlyList<string> Tags);
 
-public sealed class WorkshopAddResult
+public sealed class WorkshopAddResult(
+    bool success,
+    string? error,
+    WorkshopItemInfo? details,
+    string? relativePath,
+    bool wasUpdate)
 {
-    public WorkshopAddResult(
-        bool success,
-        string? error,
-        WorkshopItemInfo? details,
-        string? relativePath,
-        bool wasUpdate)
-    {
-        Success = success;
-        Error = error;
-        Details = details;
-        RelativePath = relativePath;
-        WasUpdate = wasUpdate;
-    }
+    public bool Success { get; } = success;
 
-    public bool Success { get; }
+    public string? Error { get; } = error;
 
-    public string? Error { get; }
+    public WorkshopItemInfo? Details { get; } = details;
 
-    public WorkshopItemInfo? Details { get; }
+    public string? RelativePath { get; } = relativePath;
 
-    public string? RelativePath { get; }
-
-    public bool WasUpdate { get; }
+    public bool WasUpdate { get; } = wasUpdate;
 
     public static WorkshopAddResult Fail(string error) => new(false, error, null, null, false);
 }

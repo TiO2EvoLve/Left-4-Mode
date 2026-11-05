@@ -11,38 +11,26 @@ namespace Left_4_Mod.Services;
 /// <summary>
 /// 扫描模组库并把文件、持久化启用状态、部署状态合并成 UI 使用的模组目录。
 /// </summary>
-public sealed class ModCatalogService : IModCatalogService
+public sealed class ModCatalogService(
+    IModLibraryService library,
+    IModStateStore stateStore,
+    IDeploymentService deployment,
+    ILogService log)
+    : IModCatalogService
 {
-    private readonly IModLibraryService _library;
-    private readonly IModStateStore _stateStore;
-    private readonly IDeploymentService _deployment;
-    private readonly ILogService _log;
-
-    public ModCatalogService(
-        IModLibraryService library,
-        IModStateStore stateStore,
-        IDeploymentService deployment,
-        ILogService log)
-    {
-        _library = library;
-        _stateStore = stateStore;
-        _deployment = deployment;
-        _log = log;
-    }
-
     public async Task<ModCatalog> LoadAsync(
         string? addonsPath,
         CancellationToken cancellationToken = default)
     {
-        if (!_library.IsConfigured || _library.RootPath is null)
+        if (!library.IsConfigured || library.RootPath is null)
         {
             throw new LibraryPathException("尚未选择模组库。");
         }
 
-        var root = _library.RootPath;
-        var files = await _library.EnumerateModFilesAsync(cancellationToken).ConfigureAwait(false);
-        var state = await _stateStore.LoadAsync(root, cancellationToken).ConfigureAwait(false);
-        var manifest = await _deployment.LoadManifestAsync(cancellationToken).ConfigureAwait(false);
+        var root = library.RootPath;
+        var files = await library.EnumerateModFilesAsync(cancellationToken).ConfigureAwait(false);
+        var state = await stateStore.LoadAsync(root, cancellationToken).ConfigureAwait(false);
+        var manifest = await deployment.LoadManifestAsync(cancellationToken).ConfigureAwait(false);
 
         var existingRecords = new Dictionary<string, ModRecord>(StringComparer.OrdinalIgnoreCase);
         foreach (var record in state.Mods)
@@ -113,19 +101,19 @@ public sealed class ModCatalogService : IModCatalogService
         {
             try
             {
-                await _stateStore.SaveAsync(state, cancellationToken).ConfigureAwait(false);
+                await stateStore.SaveAsync(state, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _log.Error(ex, "保存对账后的模组状态失败");
+                log.Error(ex, "保存对账后的模组状态失败");
             }
         }
 
         var items = new List<ModItem>(records.Count);
         foreach (var record in records)
         {
-            var fullPath = _library.GetFullPath(record.RelativePath);
-            var status = _deployment.GetStatus(manifest, addonsPath, record);
+            var fullPath = library.GetFullPath(record.RelativePath);
+            var status = deployment.GetStatus(manifest, addonsPath, record);
             items.Add(new ModItem(record, fullPath, status));
         }
 
@@ -136,7 +124,7 @@ public sealed class ModCatalogService : IModCatalogService
             .ThenBy(group => group, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
 
-        _log.Info($"模组目录已加载：{items.Count} 个模组，{groups.Length} 个分组");
+        log.Info($"模组目录已加载：{items.Count} 个模组，{groups.Length} 个分组");
 
         return new ModCatalog(state, items, groups, manifest);
     }
@@ -156,19 +144,19 @@ public sealed class ModCatalogService : IModCatalogService
     }
 
     public Task SaveStateAsync(ModState state, CancellationToken cancellationToken = default) =>
-        _stateStore.SaveAsync(state, cancellationToken);
+        stateStore.SaveAsync(state, cancellationToken);
 
     public async Task RefreshDeploymentStatesAsync(
         ModCatalog catalog,
         string? addonsPath,
         CancellationToken cancellationToken = default)
     {
-        var manifest = await _deployment.LoadManifestAsync(cancellationToken).ConfigureAwait(false);
+        var manifest = await deployment.LoadManifestAsync(cancellationToken).ConfigureAwait(false);
         catalog.Manifest = manifest;
 
         foreach (var item in catalog.Mods)
         {
-            item.DeploymentState = _deployment.GetStatus(manifest, addonsPath, item.Record);
+            item.DeploymentState = deployment.GetStatus(manifest, addonsPath, item.Record);
         }
     }
 }

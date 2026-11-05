@@ -47,15 +47,10 @@
                 
                 <Rectangle Height="1" Fill="#22808080" />
 
-                <StackPanel Spacing="8">
-                    <TextBlock Text="创意工坊" FontSize="16" FontWeight="SemiBold" />
-                    <CheckBox x:Name="AutoUpdateToggle"
-                              Content="启动后在后台自动检查并更新创意工坊模组" />
-                    <TextBlock Text="开启后不会显示进度遮罩，也不会阻塞浏览和导入；定时检查仍会在后台进行。"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               Opacity="0.7" />
-                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBlock Text="自动检查更新" FontSize="16" VerticalAlignment="Center" FontWeight="SemiBold" />
+                    <ToggleSwitch Grid.Column="1" x:Name="AutoUpdateToggle"/>
+                </Grid>
 
                 <Rectangle Height="1" Fill="#22808080" />
 

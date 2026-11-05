@@ -45,54 +45,40 @@ public enum DeploymentAction
     Keep,
 }
 
-public sealed class DeploymentPlanItem
+public sealed class DeploymentPlanItem(
+    ModRecord? mod,
+    DeploymentEntry? existing,
+    DeploymentAction action,
+    string destinationFileName,
+    bool isConflict,
+    string message)
 {
-    public DeploymentPlanItem(
-        ModRecord? mod,
-        DeploymentEntry? existing,
-        DeploymentAction action,
-        string destinationFileName,
-        bool isConflict,
-        string message)
-    {
-        Mod = mod;
-        Existing = existing;
-        Action = action;
-        DestinationFileName = destinationFileName;
-        IsConflict = isConflict;
-        Message = message;
-    }
+    public ModRecord? Mod { get; } = mod;
 
-    public ModRecord? Mod { get; }
+    public DeploymentEntry? Existing { get; } = existing;
 
-    public DeploymentEntry? Existing { get; }
+    public DeploymentAction Action { get; } = action;
 
-    public DeploymentAction Action { get; }
+    public string DestinationFileName { get; } = destinationFileName;
 
-    public string DestinationFileName { get; }
+    public bool IsConflict { get; } = isConflict;
 
-    public bool IsConflict { get; }
-
-    public string Message { get; }
+    public string Message { get; } = message;
 
     public string DisplayName =>
         Mod is not null ? Mod.FileName : Existing?.DestinationFileName ?? DestinationFileName;
 }
 
-public sealed class DeploymentPlan
+public sealed class DeploymentPlan(
+    string addonsPath,
+    DeploymentManifest manifest,
+    IReadOnlyList<DeploymentPlanItem> items)
 {
-    public DeploymentPlan(string addonsPath, DeploymentManifest manifest, IReadOnlyList<DeploymentPlanItem> items)
-    {
-        AddonsPath = addonsPath;
-        Manifest = manifest;
-        Items = items;
-    }
+    public string AddonsPath { get; } = addonsPath;
 
-    public string AddonsPath { get; }
+    public DeploymentManifest Manifest { get; } = manifest;
 
-    public DeploymentManifest Manifest { get; }
-
-    public IReadOnlyList<DeploymentPlanItem> Items { get; }
+    public IReadOnlyList<DeploymentPlanItem> Items { get; } = items;
 
     public int AddCount => Count(DeploymentAction.Add);
     public int UpdateCount => Count(DeploymentAction.Update);
@@ -131,53 +117,36 @@ public sealed class DeploymentPlan
     }
 }
 
-public sealed class DeploymentProgress
+public sealed class DeploymentProgress(int completed, int total, string currentFile)
 {
-    public DeploymentProgress(int completed, int total, string currentFile)
-    {
-        Completed = completed;
-        Total = total;
-        CurrentFile = currentFile;
-    }
+    public int Completed { get; } = completed;
 
-    public int Completed { get; }
+    public int Total { get; } = total;
 
-    public int Total { get; }
-
-    public string CurrentFile { get; }
+    public string CurrentFile { get; } = currentFile;
 
     public double Percentage => Total > 0 ? Math.Clamp(Completed * 100d / Total, 0d, 100d) : 0d;
 }
 
 public sealed record DeploymentFailure(string FileName, string Message);
 
-public sealed class DeploymentResult
+public sealed class DeploymentResult(
+    int added,
+    int updated,
+    int removed,
+    int skipped,
+    IReadOnlyList<DeploymentFailure> failures,
+    bool canceled)
 {
-    public DeploymentResult(
-        int added,
-        int updated,
-        int removed,
-        int skipped,
-        IReadOnlyList<DeploymentFailure> failures,
-        bool canceled)
-    {
-        Added = added;
-        Updated = updated;
-        Removed = removed;
-        Skipped = skipped;
-        Failures = failures;
-        Canceled = canceled;
-    }
+    public int Added { get; } = added;
 
-    public int Added { get; }
+    public int Updated { get; } = updated;
 
-    public int Updated { get; }
+    public int Removed { get; } = removed;
 
-    public int Removed { get; }
+    public int Skipped { get; } = skipped;
 
-    public int Skipped { get; }
+    public IReadOnlyList<DeploymentFailure> Failures { get; } = failures;
 
-    public IReadOnlyList<DeploymentFailure> Failures { get; }
-
-    public bool Canceled { get; }
+    public bool Canceled { get; } = canceled;
 }

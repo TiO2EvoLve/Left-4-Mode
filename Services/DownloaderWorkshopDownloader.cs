@@ -8,15 +8,8 @@ using Left_4_Mod.Models;
 namespace Left_4_Mod.Services;
 
 /// <summary>使用 Downloader 包执行工坊文件下载。</summary>
-public sealed class DownloaderWorkshopDownloader : IWorkshopDownloader
+public sealed class DownloaderWorkshopDownloader(ILogService log) : IWorkshopDownloader
 {
-    private readonly ILogService _log;
-
-    public DownloaderWorkshopDownloader(ILogService log)
-    {
-        _log = log;
-    }
-
     public async Task DownloadAsync(
         string url,
         string destinationPath,
@@ -70,7 +63,7 @@ public sealed class DownloaderWorkshopDownloader : IWorkshopDownloader
         }
         catch (Exception ex)
         {
-            _log.Error(ex, $"工坊文件下载失败：{url}");
+            log.Error(ex, $"工坊文件下载失败：{url}");
             throw;
         }
         finally

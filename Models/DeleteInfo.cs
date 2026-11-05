@@ -1,19 +1,12 @@
 namespace Left_4_Mod.Models;
 
-public sealed class DeleteInfo
+public sealed class DeleteInfo(int fileCount, int folderCount, long totalBytes)
 {
-    public DeleteInfo(int fileCount, int folderCount, long totalBytes)
-    {
-        FileCount = fileCount;
-        FolderCount = folderCount;
-        TotalBytes = totalBytes;
-    }
+    public int FileCount { get; } = fileCount;
 
-    public int FileCount { get; }
+    public int FolderCount { get; } = folderCount;
 
-    public int FolderCount { get; }
-
-    public long TotalBytes { get; }
+    public long TotalBytes { get; } = totalBytes;
 
     public bool ContainsChildren => FileCount > 0 || FolderCount > 0;
 

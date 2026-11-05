@@ -9,7 +9,7 @@
                    mc:Ignorable="d" d:DesignWidth="1120" d:DesignHeight="700"
                    x:Class="Left_4_Mod.Views.MainWindow"
                    x:DataType="vm:MainViewModel"
-                   Title="{Binding WindowTitle}"
+                   Title="L4D2 Mod 管理器"
                    Width="1120" Height="700"
                    MinWidth="900" MinHeight="540"
                    WindowStartupLocation="CenterScreen"
